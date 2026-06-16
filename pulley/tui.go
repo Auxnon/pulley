@@ -27,6 +27,12 @@ func (m menuModel) Init() tea.Cmd {
 
 func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		height := msg.Height - 2
+		if height < 1 {
+			height = 1
+		}
+		m.list.SetSize(msg.Width, height)
 	case tea.KeyMsg:
 		if m.list.FilterState() == list.Filtering && shouldExitFilterForBrowse(msg) {
 			m.list.ResetFilter()
@@ -83,7 +89,7 @@ func runMenu(title string, options []string, canDelete bool) (string, string, er
 	for _, opt := range options {
 		items = append(items, menuItem{title: opt})
 	}
-	l := list.New(items, newMenuDelegate(), 60, 14)
+	l := list.New(items, newMenuDelegate(), 0, 0)
 	l.Title = title
 	if canDelete {
 		l.Title = title + " (x to delete)"
@@ -91,7 +97,7 @@ func runMenu(title string, options []string, canDelete bool) (string, string, er
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
 	model := menuModel{list: l}
-	finalModel, err := tea.NewProgram(model).Run()
+	finalModel, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
 	if err != nil {
 		return "", "", err
 	}

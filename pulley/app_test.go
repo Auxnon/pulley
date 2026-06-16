@@ -2,6 +2,7 @@ package pulley
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -196,5 +197,85 @@ func TestSelectRepoFromAssetsQueryUsesFuzzyMatch(t *testing.T) {
 	}
 	if repo != "ec-backend" {
 		t.Fatalf("expected ec-backend, got %s", repo)
+	}
+}
+
+func TestTaskDisplayNameShortensHomePath(t *testing.T) {
+	origHome := userHomeDir
+	t.Cleanup(func() { userHomeDir = origHome })
+	userHomeDir = func() (string, error) { return "/home/alice", nil }
+
+	got := taskDisplayName(Task{Branch: "feat/a", Path: "/home/alice/work/pulley"})
+	if got != "feat/a -> ~/work/pulley" {
+		t.Fatalf("unexpected display name: %s", got)
+	}
+}
+
+func TestCurrentGitTaskErrorsOutsideGitRepo(t *testing.T) {
+	tmp := t.TempDir()
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := currentGitTask(); err == nil {
+		t.Fatal("expected error outside git repository")
+	}
+}
+
+func TestAddCurrentTaskPersistsCurrentGitBranchAndPath(t *testing.T) {
+	repo := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	run("init")
+	run("config", "user.name", "Test User")
+	run("config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "README.md")
+	run("commit", "-m", "init")
+	run("switch", "-c", "feature/add-task")
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{TasksToml: filepath.Join(t.TempDir(), "tasks.toml")}
+	if err := app.addCurrentTask(); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	cfg, err := app.loadTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tasks) != 1 {
+		t.Fatalf("expected one task, got %d", len(cfg.Tasks))
+	}
+	if cfg.Tasks[0].Branch != "feature/add-task" {
+		t.Fatalf("expected branch feature/add-task, got %s", cfg.Tasks[0].Branch)
+	}
+	if cfg.Tasks[0].Path != repo {
+		t.Fatalf("expected path %s, got %s", repo, cfg.Tasks[0].Path)
+	}
+	if cfg.Tasks[0].Repo != filepath.Base(repo) {
+		t.Fatalf("expected repo %s, got %s", filepath.Base(repo), cfg.Tasks[0].Repo)
 	}
 }

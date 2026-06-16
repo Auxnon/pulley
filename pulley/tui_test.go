@@ -77,3 +77,19 @@ func TestMenuModelArrowKeysExitFilteringForBrowse(t *testing.T) {
 		t.Fatalf("expected cursor to move to second item, got index %d", got)
 	}
 }
+
+func TestMenuModelWindowSizeUsesTerminalSpan(t *testing.T) {
+	items := []list.Item{menuItem{title: "repo"}}
+	l := list.New(items, newMenuDelegate(), 0, 0)
+	model := menuModel{list: l}
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	sized := updated.(menuModel)
+
+	if sized.list.Width() != 120 {
+		t.Fatalf("expected width 120, got %d", sized.list.Width())
+	}
+	if sized.list.Height() != 38 {
+		t.Fatalf("expected height 38, got %d", sized.list.Height())
+	}
+}

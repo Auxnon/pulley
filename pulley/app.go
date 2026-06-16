@@ -79,6 +79,9 @@ func commandBaseDir() (string, error) {
 
 func (a *App) Run(args []string) error {
 	if len(args) > 0 && args[0] == "task" {
+		if len(args) > 1 && args[1] == "add" {
+			return a.addCurrentTask()
+		}
 		return a.runTaskSelector()
 	}
 
@@ -557,7 +560,7 @@ func (a *App) runTaskSelector() error {
 	options := make([]string, 0, len(cfg.Tasks))
 	indexByName := make(map[string]int, len(cfg.Tasks))
 	for i, t := range cfg.Tasks {
-		name := fmt.Sprintf("%s -> %s", t.Branch, t.Path)
+		name := taskDisplayName(t)
 		options = append(options, name)
 		indexByName[name] = i
 	}
@@ -586,6 +589,67 @@ func (a *App) runTaskSelector() error {
 	}
 
 	return launchShell(cfg.Tasks[idx].Path)
+}
+
+func (a *App) addCurrentTask() error {
+	t, err := currentGitTask()
+	if err != nil {
+		return err
+	}
+	return a.addTask(t)
+}
+
+func currentGitTask() (Task, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return Task{}, err
+	}
+	repoRoot, err := gitOutput(cwd, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return Task{}, errors.New("current directory is not in a git repository")
+	}
+	branch, err := gitOutput(cwd, "branch", "--show-current")
+	if err != nil || strings.TrimSpace(branch) == "" {
+		return Task{}, errors.New("current git branch could not be determined")
+	}
+
+	return Task{
+		Branch:    strings.TrimSpace(branch),
+		Path:      cwd,
+		Repo:      filepath.Base(strings.TrimSpace(repoRoot)),
+		CreatedAt: time.Now().UTC(),
+	}, nil
+}
+
+func taskDisplayName(t Task) string {
+	return fmt.Sprintf("%s -> %s", t.Branch, shortenHomePath(t.Path))
+}
+
+func shortenHomePath(path string) string {
+	home, err := userHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	cleanPath := filepath.Clean(path)
+	cleanHome := filepath.Clean(home)
+	if cleanPath == cleanHome {
+		return "~"
+	}
+	prefix := cleanHome + string(os.PathSeparator)
+	if strings.HasPrefix(cleanPath, prefix) {
+		return "~" + string(os.PathSeparator) + strings.TrimPrefix(cleanPath, prefix)
+	}
+	return path
+}
+
+func gitOutput(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func confirm(prompt string) (bool, error) {
