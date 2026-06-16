@@ -4,12 +4,12 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -238,7 +238,10 @@ func copyFile(src, dst string) error {
 	}
 	defer out.Close()
 	_, err = out.ReadFrom(in)
-	return err
+	if err != nil {
+		return fmt.Errorf("copy file from %s to %s: %w", src, dst, err)
+	}
+	return nil
 }
 
 func gitBranches(repoPath string) ([]string, error) {
@@ -264,9 +267,26 @@ func gitBranches(repoPath string) ([]string, error) {
 	}
 	sort.Strings(branches)
 	if len(branches) == 0 {
-		branches = append(branches, "main")
+		if fallback, err := gitDefaultBranch(repoPath); err == nil && fallback != "" {
+			branches = append(branches, fallback)
+		}
+	}
+	if len(branches) == 0 {
+		return nil, errors.New("no branches found to switch from")
 	}
 	return branches, nil
+}
+
+func gitDefaultBranch(repoPath string) (string, error) {
+	cmd := exec.Command("git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	branch := strings.TrimSpace(string(out))
+	branch = strings.TrimPrefix(branch, "origin/")
+	return branch, nil
 }
 
 func runCmd(dir, name string, args ...string) error {
@@ -286,24 +306,10 @@ func promptInput(label, defaultValue string) (string, error) {
 	reader := bufio.NewReader(os.Stdin)
 	text, err := reader.ReadString('\n')
 	if err != nil {
-		if errors.Is(err, os.ErrClosed) {
+		if errors.Is(err, io.EOF) {
 			return defaultValue, nil
 		}
-		if errors.Is(err, syscall.EINVAL) {
-			return defaultValue, nil
-		}
-		if errors.Is(err, syscall.ENOTTY) {
-			return defaultValue, nil
-		}
-		if errors.Is(err, syscall.EIO) {
-			return defaultValue, nil
-		}
-		if errors.Is(err, os.ErrPermission) {
-			return defaultValue, nil
-		}
-		if strings.TrimSpace(text) == "" {
-			return defaultValue, nil
-		}
+		return "", err
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -391,7 +397,7 @@ func confirm(prompt string) (bool, error) {
 func launchShell(dir string) error {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
-		shell = "/bin/bash"
+		shell = "/bin/sh"
 	}
 	cmd := exec.Command(shell)
 	cmd.Dir = dir
