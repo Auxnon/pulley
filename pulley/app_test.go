@@ -122,3 +122,23 @@ func TestResolveRepoQueryReturnsSingleFuzzyMatch(t *testing.T) {
 		t.Fatalf("expected ec-backend, got %s", repo)
 	}
 }
+
+func TestSelectRepoFromAssetsQueryUsesFuzzyMatch(t *testing.T) {
+	root := t.TempDir()
+	assets := filepath.Join(root, "assets")
+	if err := os.MkdirAll(filepath.Join(assets, "ec-backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(assets, "platform-api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{AssetsDir: assets}
+	repo, err := app.selectRepoFromAssetsQuery("ecb")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if repo != "ec-backend" {
+		t.Fatalf("expected ec-backend, got %s", repo)
+	}
+}

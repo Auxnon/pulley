@@ -76,7 +76,7 @@ func (a *App) Run(args []string) error {
 	if len(args) > 0 {
 		selected, err := a.selectRepoFromAssetsQuery(args[0])
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to resolve repository query: %w", err)
 		}
 		repo = selected
 	} else {
@@ -286,14 +286,15 @@ func (a *App) selectRepoFromAssetsQuery(query string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return "", errors.New("repo cannot be empty")
-	}
 	return resolveRepoQuery(query, projects)
 }
 
 func resolveRepoQuery(query string, projects []string) (string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", errors.New("repo cannot be empty")
+	}
+
 	matches := fuzzyMatchProjects(query, projects)
 	if len(matches) > 0 {
 		if len(matches) == 1 {
