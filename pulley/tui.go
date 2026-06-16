@@ -19,11 +19,18 @@ type menuModel struct {
 	action    string
 }
 
-func (m menuModel) Init() tea.Cmd { return nil }
+func (m menuModel) Init() tea.Cmd {
+	return func() tea.Msg {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
+	}
+}
 
 func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.list.FilterState() == list.Filtering {
+			break
+		}
 		switch msg.String() {
 		case "enter":
 			if it, ok := m.list.SelectedItem().(menuItem); ok {
@@ -65,13 +72,13 @@ func runMenu(title string, options []string, canDelete bool) (string, string, er
 	for _, opt := range options {
 		items = append(items, menuItem{title: opt})
 	}
-	l := list.New(items, list.NewDefaultDelegate(), 60, 14)
+	l := list.New(items, newMenuDelegate(), 60, 14)
 	l.Title = title
 	if canDelete {
 		l.Title = title + " (x to delete)"
 	}
 	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(false)
+	l.SetFilteringEnabled(true)
 	model := menuModel{list: l}
 	finalModel, err := tea.NewProgram(model).Run()
 	if err != nil {
@@ -82,4 +89,11 @@ func runMenu(title string, options []string, canDelete bool) (string, string, er
 		return "", "", errors.New("selection cancelled")
 	}
 	return result.selection, result.action, nil
+}
+
+func newMenuDelegate() list.DefaultDelegate {
+	delegate := list.NewDefaultDelegate()
+	delegate.ShowDescription = false
+	delegate.SetSpacing(0)
+	return delegate
 }
