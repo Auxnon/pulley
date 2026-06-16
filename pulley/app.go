@@ -170,6 +170,7 @@ func (a *App) pullRepo(repo string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("%s -> %s\n", baseBranch, newBranch)
 	if err := runCmd(destPath, "git", "switch", "-c", newBranch, baseBranch); err != nil {
 		return err
 	}
@@ -262,7 +263,7 @@ func promptTicketNumber() (string, error) {
 	if ticket == "" {
 		return "", errors.New("ticket number cannot be empty")
 	}
-	fmt.Printf("( #%s )\n", ticket)
+	fmt.Printf("#%s\n", ticket)
 	return ticket, nil
 }
 

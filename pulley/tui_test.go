@@ -67,14 +67,22 @@ func TestMenuModelArrowKeysExitFilteringForBrowse(t *testing.T) {
 	if filteringModel.list.FilterState() != list.Filtering {
 		t.Fatalf("expected filtering state, got %v", filteringModel.list.FilterState())
 	}
+	updated, _ = filteringModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r', 'e', 'p', 'o'}})
+	filteringModel = updated.(menuModel)
+	if filteringModel.list.FilterValue() != "repo" {
+		t.Fatalf("expected filter value to be preserved, got %q", filteringModel.list.FilterValue())
+	}
 
 	updated, _ = filteringModel.Update(tea.KeyMsg{Type: tea.KeyDown})
 	browsingModel := updated.(menuModel)
-	if browsingModel.list.FilterState() != list.Unfiltered {
-		t.Fatalf("expected unfiltered state, got %v", browsingModel.list.FilterState())
+	if browsingModel.list.FilterState() != list.FilterApplied {
+		t.Fatalf("expected filter-applied state, got %v", browsingModel.list.FilterState())
 	}
 	if got := browsingModel.list.Index(); got != 1 {
 		t.Fatalf("expected cursor to move to second item, got index %d", got)
+	}
+	if browsingModel.list.FilterValue() != "repo" {
+		t.Fatalf("expected filter to remain applied, got %q", browsingModel.list.FilterValue())
 	}
 }
 

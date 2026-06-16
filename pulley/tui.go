@@ -35,7 +35,7 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SetSize(msg.Width, height)
 	case tea.KeyMsg:
 		if m.list.FilterState() == list.Filtering && shouldExitFilterForBrowse(msg) {
-			m.list.ResetFilter()
+			m.list, _ = m.list.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		}
 		if m.list.FilterState() == list.Filtering {
 			if msg.String() == "enter" {
