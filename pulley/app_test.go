@@ -53,9 +53,18 @@ func TestNextAvailableName(t *testing.T) {
 }
 
 func TestFormatPullRepoMessage(t *testing.T) {
-	got := formatPullRepoMessage("ec-backend")
-	if got != "Pulling repo: ec-backend" {
-		t.Fatalf("unexpected message: %s", got)
+	tests := []struct {
+		repo string
+		want string
+	}{
+		{repo: "ec-backend", want: "Pulling repo: ec-backend"},
+		{repo: "", want: "Pulling repo: "},
+		{repo: "repo/with-special_chars", want: "Pulling repo: repo/with-special_chars"},
+	}
+	for _, tt := range tests {
+		if got := formatPullRepoMessage(tt.repo); got != tt.want {
+			t.Fatalf("unexpected message for %q: %s", tt.repo, got)
+		}
 	}
 }
 
@@ -75,6 +84,16 @@ func TestTicketPrefixedNameRejectsEmptyTicketOrName(t *testing.T) {
 	}
 	if _, err := ticketPrefixedName("123", ""); err == nil {
 		t.Fatal("expected error for empty name")
+	}
+}
+
+func TestTicketPrefixedNameTrimsWhitespace(t *testing.T) {
+	got, err := ticketPrefixedName(" 123 ", " backend ")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if got != "123-backend" {
+		t.Fatalf("expected trimmed value, got %s", got)
 	}
 }
 

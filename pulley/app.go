@@ -301,7 +301,7 @@ func promptBranchName(ticket string) (string, error) {
 	}
 	branch, err := ticketPrefixedName(ticket, branchSuffix)
 	if err != nil {
-		return "", errors.New("branch name cannot be empty")
+		return "", errors.New("branch suffix cannot be empty")
 	}
 	fmt.Printf("Branch preview: %s\n", branch)
 	return branch, nil
