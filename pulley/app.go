@@ -21,6 +21,12 @@ const (
 	tasksFileName  = "tasks.toml"
 )
 
+var (
+	executablePath = os.Executable
+	evalSymlinks   = filepath.EvalSymlinks
+	userHomeDir    = os.UserHomeDir
+)
+
 type App struct {
 	AssetsDir  string
 	PullRoot   string
@@ -44,11 +50,11 @@ type Task struct {
 }
 
 func NewDefaultApp() (*App, error) {
-	base, err := os.Getwd()
+	base, err := commandBaseDir()
 	if err != nil {
 		return nil, err
 	}
-	home, err := os.UserHomeDir()
+	home, err := userHomeDir()
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +64,17 @@ func NewDefaultApp() (*App, error) {
 		SourceToml: filepath.Join(base, sourceFileName),
 		TasksToml:  filepath.Join(base, tasksFileName),
 	}, nil
+}
+
+func commandBaseDir() (string, error) {
+	exePath, err := executablePath()
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := evalSymlinks(exePath); err == nil {
+		exePath = resolved
+	}
+	return filepath.Dir(exePath), nil
 }
 
 func (a *App) Run(args []string) error {

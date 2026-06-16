@@ -28,7 +28,17 @@ func (m menuModel) Init() tea.Cmd {
 func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.list.FilterState() == list.Filtering && shouldExitFilterForBrowse(msg) {
+			m.list.ResetFilter()
+		}
 		if m.list.FilterState() == list.Filtering {
+			if msg.String() == "enter" {
+				if it, ok := m.list.SelectedItem().(menuItem); ok {
+					m.selection = it.title
+					m.action = "select"
+					return m, tea.Quit
+				}
+			}
 			// Delegate all key handling to the list component while filtering is active.
 			break
 		}
@@ -97,4 +107,13 @@ func newMenuDelegate() list.DefaultDelegate {
 	delegate.ShowDescription = false
 	delegate.SetSpacing(0)
 	return delegate
+}
+
+func shouldExitFilterForBrowse(msg tea.KeyMsg) bool {
+	switch msg.String() {
+	case "up", "down", "pgup", "pgdown", "home", "end":
+		return true
+	default:
+		return false
+	}
 }

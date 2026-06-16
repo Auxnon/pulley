@@ -34,7 +34,7 @@ func TestMenuModelInitStartsFiltering(t *testing.T) {
 	}
 }
 
-func TestMenuModelIgnoresEnterKeyDuringFiltering(t *testing.T) {
+func TestMenuModelEnterSelectsWhileFiltering(t *testing.T) {
 	items := []list.Item{menuItem{title: "repo"}}
 	l := list.New(items, newMenuDelegate(), 60, 14)
 	l.SetFilteringEnabled(true)
@@ -48,7 +48,32 @@ func TestMenuModelIgnoresEnterKeyDuringFiltering(t *testing.T) {
 
 	updated, _ = filteringModel.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	enterModel := updated.(menuModel)
-	if enterModel.action != "" || enterModel.selection != "" {
-		t.Fatalf("expected no selection while filtering, got action=%q selection=%q", enterModel.action, enterModel.selection)
+	if enterModel.action != "select" || enterModel.selection != "repo" {
+		t.Fatalf("expected selection while filtering, got action=%q selection=%q", enterModel.action, enterModel.selection)
+	}
+}
+
+func TestMenuModelArrowKeysExitFilteringForBrowse(t *testing.T) {
+	items := []list.Item{
+		menuItem{title: "repo-a"},
+		menuItem{title: "repo-b"},
+	}
+	l := list.New(items, newMenuDelegate(), 60, 14)
+	l.SetFilteringEnabled(true)
+
+	model := menuModel{list: l}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	filteringModel := updated.(menuModel)
+	if filteringModel.list.FilterState() != list.Filtering {
+		t.Fatalf("expected filtering state, got %v", filteringModel.list.FilterState())
+	}
+
+	updated, _ = filteringModel.Update(tea.KeyMsg{Type: tea.KeyDown})
+	browsingModel := updated.(menuModel)
+	if browsingModel.list.FilterState() != list.Unfiltered {
+		t.Fatalf("expected unfiltered state, got %v", browsingModel.list.FilterState())
+	}
+	if got := browsingModel.list.Index(); got != 1 {
+		t.Fatalf("expected cursor to move to second item, got index %d", got)
 	}
 }

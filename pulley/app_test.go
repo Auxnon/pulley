@@ -6,6 +6,33 @@ import (
 	"testing"
 )
 
+func TestCommandBaseDirUsesResolvedExecutablePath(t *testing.T) {
+	origExec := executablePath
+	origEval := evalSymlinks
+	t.Cleanup(func() {
+		executablePath = origExec
+		evalSymlinks = origEval
+	})
+
+	executablePath = func() (string, error) {
+		return "/usr/local/bin/pulley", nil
+	}
+	evalSymlinks = func(path string) (string, error) {
+		if path != "/usr/local/bin/pulley" {
+			t.Fatalf("unexpected path: %s", path)
+		}
+		return "/home/user/projects/pulley/pulley", nil
+	}
+
+	base, err := commandBaseDir()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if base != "/home/user/projects/pulley" {
+		t.Fatalf("unexpected base dir: %s", base)
+	}
+}
+
 func TestNextAvailableName(t *testing.T) {
 	root := t.TempDir()
 	if got := nextAvailableName(root, "proj"); got != "proj" {
