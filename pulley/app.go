@@ -103,7 +103,7 @@ func (a *App) Run(args []string) error {
 		}
 		repo = selected
 	}
-	fmt.Println(formatPullRepoMessage(repo))
+	fmt.Printf("Pulling repo: %s\n", repo)
 
 	return a.pullRepo(repo)
 }
@@ -249,10 +249,6 @@ func (a *App) promptAndSaveSource() (string, error) {
 	return source, nil
 }
 
-func formatPullRepoMessage(repo string) string {
-	return fmt.Sprintf("Pulling repo: %s", repo)
-}
-
 func promptTicketNumber() (string, error) {
 	ticket, err := promptInput("Ticket number", "")
 	if err != nil {
@@ -290,8 +286,9 @@ func promptDestinationName(root, ticket, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fmt.Printf("Folder preview: %s\n", prefixed)
-	return nextAvailableName(root, prefixed), nil
+	finalName := nextAvailableName(root, prefixed)
+	fmt.Printf("Folder preview: %s\n", finalName)
+	return finalName, nil
 }
 
 func promptBranchName(ticket string) (string, error) {
@@ -299,7 +296,8 @@ func promptBranchName(ticket string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(branchSuffix) == "" {
+	branchSuffix = strings.TrimSpace(branchSuffix)
+	if branchSuffix == "" {
 		return "", errors.New("branch name cannot be empty")
 	}
 	branch, err := ticketPrefixedName(ticket, branchSuffix)
