@@ -191,12 +191,16 @@ func buildCloneURL(source, repo string) string {
 	}
 
 	if strings.HasPrefix(source, "https://") || strings.HasPrefix(source, "http://") {
-		if u, err := url.Parse(source); err == nil && u.Host != "" {
+		u, err := url.Parse(source)
+		if err == nil && u.Host != "" {
 			path := strings.Trim(u.Path, "/")
 			if path == "" {
 				return fmt.Sprintf("git@%s:%s", u.Host, repo)
 			}
 			return fmt.Sprintf("git@%s:%s/%s", u.Host, path, repo)
+		}
+		if err != nil {
+			return strings.TrimRight(source, "/") + "/" + repo
 		}
 	}
 
