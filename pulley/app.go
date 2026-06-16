@@ -299,9 +299,12 @@ func promptBranchName(ticket string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(branchSuffix) == "" {
+		return "", errors.New("branch name cannot be empty")
+	}
 	branch, err := ticketPrefixedName(ticket, branchSuffix)
 	if err != nil {
-		return "", errors.New("branch suffix cannot be empty")
+		return "", fmt.Errorf("invalid branch name: %w", err)
 	}
 	fmt.Printf("Branch preview: %s\n", branch)
 	return branch, nil
