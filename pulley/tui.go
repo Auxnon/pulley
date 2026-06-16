@@ -29,6 +29,7 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if m.list.FilterState() == list.Filtering {
+			// Delegate all key handling to the list component while filtering is active.
 			break
 		}
 		switch msg.String() {

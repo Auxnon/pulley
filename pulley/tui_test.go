@@ -34,7 +34,7 @@ func TestMenuModelInitStartsFiltering(t *testing.T) {
 	}
 }
 
-func TestMenuModelEnterWhileFilteringDoesNotSelect(t *testing.T) {
+func TestMenuModelIgnoresEnterKeyDuringFiltering(t *testing.T) {
 	items := []list.Item{menuItem{title: "repo"}}
 	l := list.New(items, newMenuDelegate(), 60, 14)
 	l.SetFilteringEnabled(true)
