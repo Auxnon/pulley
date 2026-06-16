@@ -112,3 +112,13 @@ func TestFuzzyMatchProjects(t *testing.T) {
 		t.Fatalf("unexpected matches: %+v", matches)
 	}
 }
+
+func TestResolveRepoQueryReturnsSingleFuzzyMatch(t *testing.T) {
+	repo, err := resolveRepoQuery("ecb", []string{"ec-backend", "ec-frontend", "platform-api"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if repo != "ec-backend" {
+		t.Fatalf("expected ec-backend, got %s", repo)
+	}
+}

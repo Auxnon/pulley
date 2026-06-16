@@ -74,7 +74,11 @@ func (a *App) Run(args []string) error {
 
 	repo := ""
 	if len(args) > 0 {
-		repo = args[0]
+		selected, err := a.selectRepoFromAssetsQuery(args[0])
+		if err != nil {
+			return err
+		}
+		repo = selected
 	} else {
 		selected, err := a.selectRepoFromAssetsOrNew()
 		if err != nil {
@@ -274,6 +278,22 @@ func (a *App) selectRepoFromAssetsOrNew() (string, error) {
 		return pickFromList("Pick project", projects, false)
 	}
 
+	return resolveRepoQuery(query, projects)
+}
+
+func (a *App) selectRepoFromAssetsQuery(query string) (string, error) {
+	projects, err := listAssetProjects(a.AssetsDir)
+	if err != nil {
+		return "", err
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", errors.New("repo cannot be empty")
+	}
+	return resolveRepoQuery(query, projects)
+}
+
+func resolveRepoQuery(query string, projects []string) (string, error) {
 	matches := fuzzyMatchProjects(query, projects)
 	if len(matches) > 0 {
 		if len(matches) == 1 {
