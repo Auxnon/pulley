@@ -262,6 +262,7 @@ func promptTicketNumber() (string, error) {
 	if ticket == "" {
 		return "", errors.New("ticket number cannot be empty")
 	}
+	fmt.Printf("( #%s )\n", ticket)
 	return ticket, nil
 }
 
@@ -278,21 +279,33 @@ func ticketPrefixedName(ticket, name string) (string, error) {
 }
 
 func promptDestinationName(root, ticket, repo string) (string, error) {
-	choice, err := promptInput("Custom folder name (leave empty for auto)", repo)
+	autoName, err := ticketPrefixedName(ticket, repo)
 	if err != nil {
 		return "", err
 	}
-	choice = strings.TrimSpace(choice)
-	if choice == "" {
-		choice = repo
+	choice, err := promptInput("Custom folder name (leave empty for auto)", autoName)
+	if err != nil {
+		return "", err
 	}
-	prefixed, err := ticketPrefixedName(ticket, choice)
+	prefixed, err := destinationNameFromChoice(ticket, autoName, choice)
 	if err != nil {
 		return "", err
 	}
 	finalName := nextAvailableName(root, prefixed)
 	fmt.Printf("Folder preview: %s\n", finalName)
 	return finalName, nil
+}
+
+func destinationNameFromChoice(ticket, autoName, choice string) (string, error) {
+	choice = strings.TrimSpace(choice)
+	if choice == "" {
+		return autoName, nil
+	}
+	ticket = strings.TrimSpace(ticket)
+	if ticket != "" && strings.HasPrefix(choice, ticket+"-") {
+		return choice, nil
+	}
+	return ticketPrefixedName(ticket, choice)
 }
 
 func promptBranchName(ticket string) (string, error) {

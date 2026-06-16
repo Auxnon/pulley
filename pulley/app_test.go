@@ -84,6 +84,36 @@ func TestTicketPrefixedNameTrimsWhitespace(t *testing.T) {
 	}
 }
 
+func TestDestinationNameFromChoiceUsesAutoWhenEmpty(t *testing.T) {
+	got, err := destinationNameFromChoice("1234", "1234-ec-backend", "")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if got != "1234-ec-backend" {
+		t.Fatalf("expected auto name, got %s", got)
+	}
+}
+
+func TestDestinationNameFromChoicePrefixesCustomBaseName(t *testing.T) {
+	got, err := destinationNameFromChoice("1234", "1234-ec-backend", "backend")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if got != "1234-backend" {
+		t.Fatalf("expected ticket-prefixed custom name, got %s", got)
+	}
+}
+
+func TestDestinationNameFromChoiceKeepsAlreadyPrefixedName(t *testing.T) {
+	got, err := destinationNameFromChoice("1234", "1234-ec-backend", "1234-backend")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if got != "1234-backend" {
+		t.Fatalf("expected unchanged prefixed name, got %s", got)
+	}
+}
+
 func TestCopyTreeCopiesDotfiles(t *testing.T) {
 	src := t.TempDir()
 	dst := t.TempDir()
