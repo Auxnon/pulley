@@ -25,6 +25,7 @@ var (
 	executablePath = os.Executable
 	evalSymlinks   = filepath.EvalSymlinks
 	userHomeDir    = os.UserHomeDir
+	lookPath       = exec.LookPath
 )
 
 type App struct {
@@ -277,7 +278,7 @@ func ticketPrefixedName(ticket, name string) (string, error) {
 }
 
 func promptDestinationName(root, ticket, repo string) (string, error) {
-	choice, err := promptInput("Custom folder name (leave empty for auto)", "")
+	choice, err := promptInput("Custom folder name (leave empty for auto)", repo)
 	if err != nil {
 		return "", err
 	}
@@ -506,6 +507,40 @@ func runCmd(dir, name string, args ...string) error {
 }
 
 func promptInput(label, defaultValue string) (string, error) {
+	input, err := promptInputWithGum(label, defaultValue)
+	if err == nil {
+		return input, nil
+	}
+	if !errors.Is(err, exec.ErrNotFound) {
+		return "", err
+	}
+
+	return promptInputFallback(label, defaultValue)
+}
+
+func promptInputWithGum(label, defaultValue string) (string, error) {
+	if _, err := lookPath("gum"); err != nil {
+		return "", err
+	}
+	args := []string{"input", "--prompt", label + ": "}
+	if defaultValue != "" {
+		args = append(args, "--placeholder", defaultValue)
+	}
+	cmd := exec.Command("gum", args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	text := strings.TrimSpace(string(out))
+	if text == "" {
+		return defaultValue, nil
+	}
+	return text, nil
+}
+
+func promptInputFallback(label, defaultValue string) (string, error) {
 	fmt.Printf("%s", label)
 	if defaultValue != "" {
 		fmt.Printf(" [%s]", defaultValue)
@@ -596,7 +631,11 @@ func (a *App) addCurrentTask() error {
 	if err != nil {
 		return err
 	}
-	return a.addTask(t)
+	if err := a.addTask(t); err != nil {
+		return err
+	}
+	fmt.Printf("Added task: %s\n", taskDisplayName(t))
+	return nil
 }
 
 func currentGitTask() (Task, error) {

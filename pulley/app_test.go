@@ -1,9 +1,11 @@
 package pulley
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -258,8 +260,19 @@ func TestAddCurrentTaskPersistsCurrentGitBranchAndPath(t *testing.T) {
 	}
 
 	app := &App{TasksToml: filepath.Join(t.TempDir(), "tasks.toml")}
-	if err := app.addCurrentTask(); err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	out := captureStdout(t, func() {
+		if err := app.addCurrentTask(); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+	if !strings.Contains(out, "Added task:") {
+		t.Fatalf("expected add confirmation output, got %q", out)
+	}
+	if !strings.Contains(out, "feature/add-task") {
+		t.Fatalf("expected output to include branch name, got %q", out)
+	}
+	if !strings.Contains(out, repo) {
+		t.Fatalf("expected output to include repo path, got %q", out)
 	}
 
 	cfg, err := app.loadTasks()
@@ -316,8 +329,19 @@ func TestAddCurrentTaskUsesCurrentSubfolderPath(t *testing.T) {
 	}
 
 	app := &App{TasksToml: filepath.Join(t.TempDir(), "tasks.toml")}
-	if err := app.addCurrentTask(); err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	out := captureStdout(t, func() {
+		if err := app.addCurrentTask(); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
+	if !strings.Contains(out, "Added task:") {
+		t.Fatalf("expected add confirmation output, got %q", out)
+	}
+	if !strings.Contains(out, "feature/add-task") {
+		t.Fatalf("expected output to include branch name, got %q", out)
+	}
+	if !strings.Contains(out, subdir) {
+		t.Fatalf("expected output to include subdir path, got %q", out)
 	}
 
 	cfg, err := app.loadTasks()
@@ -330,4 +354,29 @@ func TestAddCurrentTaskUsesCurrentSubfolderPath(t *testing.T) {
 	if cfg.Tasks[0].Path != subdir {
 		t.Fatalf("expected task path to be current folder %s, got %s", subdir, cfg.Tasks[0].Path)
 	}
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe setup failed: %v", err)
+	}
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = origStdout })
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("pipe close failed: %v", err)
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("stdout read failed: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("pipe reader close failed: %v", err)
+	}
+	return string(data)
 }
