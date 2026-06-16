@@ -606,17 +606,20 @@ func currentGitTask() (Task, error) {
 	}
 	repoRoot, err := gitOutput(cwd, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return Task{}, errors.New("current directory is not in a git repository")
+		return Task{}, fmt.Errorf("current directory is not in a git repository: %w", err)
 	}
 	branch, err := gitOutput(cwd, "branch", "--show-current")
-	if err != nil || strings.TrimSpace(branch) == "" {
+	if err != nil {
+		return Task{}, fmt.Errorf("failed to get current git branch: %w", err)
+	}
+	if strings.TrimSpace(branch) == "" {
 		return Task{}, errors.New("current git branch could not be determined")
 	}
 
 	return Task{
 		Branch:    strings.TrimSpace(branch),
 		Path:      cwd,
-		Repo:      filepath.Base(strings.TrimSpace(repoRoot)),
+		Repo:      filepath.Base(repoRoot),
 		CreatedAt: time.Now().UTC(),
 	}, nil
 }
@@ -645,9 +648,13 @@ func shortenHomePath(path string) string {
 func gitOutput(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", err
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return "", fmt.Errorf("git %s failed: %s: %w", strings.Join(args, " "), msg, err)
+		}
+		return "", fmt.Errorf("git %s failed: %w", strings.Join(args, " "), err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

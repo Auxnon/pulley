@@ -279,3 +279,55 @@ func TestAddCurrentTaskPersistsCurrentGitBranchAndPath(t *testing.T) {
 		t.Fatalf("expected repo %s, got %s", filepath.Base(repo), cfg.Tasks[0].Repo)
 	}
 }
+
+func TestAddCurrentTaskUsesCurrentSubfolderPath(t *testing.T) {
+	repo := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	run("init")
+	run("config", "user.name", "Test User")
+	run("config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "README.md")
+	run("commit", "-m", "init")
+	run("switch", "-c", "feature/add-task")
+
+	subdir := filepath.Join(repo, "services", "api")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+	if err := os.Chdir(subdir); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{TasksToml: filepath.Join(t.TempDir(), "tasks.toml")}
+	if err := app.addCurrentTask(); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	cfg, err := app.loadTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tasks) != 1 {
+		t.Fatalf("expected one task, got %d", len(cfg.Tasks))
+	}
+	if cfg.Tasks[0].Path != subdir {
+		t.Fatalf("expected task path to be current folder %s, got %s", subdir, cfg.Tasks[0].Path)
+	}
+}
