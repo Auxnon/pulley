@@ -86,3 +86,29 @@ func TestBuildRepoURL(t *testing.T) {
 		t.Fatalf("unexpected URL: %s", got)
 	}
 }
+
+func TestBuildCloneURLUsesSSH(t *testing.T) {
+	got := buildCloneURL("https://gitlab.com/everon-technologies/", "ec-backend")
+	if got != "git@gitlab.com:everon-technologies/ec-backend" {
+		t.Fatalf("unexpected clone URL: %s", got)
+	}
+}
+
+func TestListAssetProjectsMissingFolderIsNotError(t *testing.T) {
+	root := t.TempDir()
+	projects, err := listAssetProjects(filepath.Join(root, "missing-assets"))
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("expected no projects, got %+v", projects)
+	}
+}
+
+func TestFuzzyMatchProjects(t *testing.T) {
+	projects := []string{"ec-backend", "ec-frontend", "platform-api"}
+	matches := fuzzyMatchProjects("ecb", projects)
+	if len(matches) != 1 || matches[0] != "ec-backend" {
+		t.Fatalf("unexpected matches: %+v", matches)
+	}
+}

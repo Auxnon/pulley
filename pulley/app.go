@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,17 +61,13 @@ func NewDefaultApp() (*App, error) {
 }
 
 func (a *App) Run(args []string) error {
-	if len(args) > 0 && args[0] == "source" {
-		if len(args) < 2 {
-			return errors.New("usage: pulley source <git base url>")
-		}
-		return a.saveSource(args[1])
-	}
-
 	if len(args) > 0 && args[0] == "task" {
 		return a.runTaskSelector()
 	}
 
+	if err := os.MkdirAll(a.AssetsDir, 0o755); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(a.PullRoot, 0o755); err != nil {
 		return err
 	}
@@ -79,7 +76,7 @@ func (a *App) Run(args []string) error {
 	if len(args) > 0 {
 		repo = args[0]
 	} else {
-		selected, err := pickFromAssets(a.AssetsDir)
+		selected, err := a.selectRepoFromAssetsOrNew()
 		if err != nil {
 			return err
 		}
@@ -104,22 +101,29 @@ func (a *App) saveSource(source string) error {
 func (a *App) pullRepo(repo string) error {
 	source, err := a.loadSource()
 	if err != nil {
-		return err
+		source, err = a.promptAndSaveSource()
+		if err != nil {
+			return err
+		}
 	}
-	url := buildRepoURL(source, repo)
+	cloneURL := buildCloneURL(source, repo)
 	destName, err := promptDestinationName(a.PullRoot, repo)
 	if err != nil {
 		return err
 	}
 	destPath := filepath.Join(a.PullRoot, destName)
 
-	if err := runCmd("", "git", "clone", url, destPath); err != nil {
+	if err := runCmd("", "git", "clone", cloneURL, destPath); err != nil {
 		return err
 	}
 
 	assetTemplate := filepath.Join(a.AssetsDir, repo)
 	if st, err := os.Stat(assetTemplate); err == nil && st.IsDir() {
 		if err := copyTree(assetTemplate, destPath); err != nil {
+			return err
+		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(assetTemplate, 0o755); err != nil {
 			return err
 		}
 	}
@@ -155,7 +159,7 @@ func (a *App) pullRepo(repo string) error {
 func (a *App) loadSource() (string, error) {
 	var cfg sourceConfig
 	if _, err := os.Stat(a.SourceToml); err != nil {
-		return "", errors.New("source not configured, run: pulley source <git base url>")
+		return "", errors.New("source not configured")
 	}
 	if _, err := toml.DecodeFile(a.SourceToml, &cfg); err != nil {
 		return "", err
@@ -169,6 +173,54 @@ func (a *App) loadSource() (string, error) {
 
 func buildRepoURL(source, repo string) string {
 	return strings.TrimRight(strings.TrimSpace(source), "/") + "/" + strings.Trim(strings.TrimSpace(repo), "/")
+}
+
+func buildCloneURL(source, repo string) string {
+	source = strings.TrimSpace(source)
+	repo = strings.Trim(strings.TrimSpace(repo), "/")
+	if source == "" {
+		return repo
+	}
+
+	if strings.HasPrefix(source, "git@") {
+		src := strings.TrimRight(source, "/")
+		if strings.Contains(src, ":") {
+			return src + "/" + repo
+		}
+		return src + ":" + repo
+	}
+
+	if strings.HasPrefix(source, "https://") || strings.HasPrefix(source, "http://") {
+		if u, err := url.Parse(source); err == nil && u.Host != "" {
+			path := strings.Trim(u.Path, "/")
+			if path == "" {
+				return fmt.Sprintf("git@%s:%s", u.Host, repo)
+			}
+			return fmt.Sprintf("git@%s:%s/%s", u.Host, path, repo)
+		}
+	}
+
+	src := strings.Trim(source, "/")
+	parts := strings.SplitN(src, "/", 2)
+	if len(parts) == 2 {
+		return fmt.Sprintf("git@%s:%s/%s", parts[0], parts[1], repo)
+	}
+	return src + "/" + repo
+}
+
+func (a *App) promptAndSaveSource() (string, error) {
+	source, err := promptInput("Set source git namespace", "")
+	if err != nil {
+		return "", err
+	}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return "", errors.New("source cannot be empty")
+	}
+	if err := a.saveSource(source); err != nil {
+		return "", err
+	}
+	return source, nil
 }
 
 func promptDestinationName(root, repo string) (string, error) {
@@ -197,6 +249,72 @@ func nextAvailableName(root, base string) string {
 			return candidate
 		}
 	}
+}
+
+func (a *App) selectRepoFromAssetsOrNew() (string, error) {
+	projects, err := listAssetProjects(a.AssetsDir)
+	if err != nil {
+		return "", err
+	}
+
+	query, err := promptInput("Find repo (fuzzy, blank to browse)", "")
+	if err != nil {
+		return "", err
+	}
+	query = strings.TrimSpace(query)
+
+	if query == "" {
+		if len(projects) == 0 {
+			return "", errors.New("no project folders found in assets")
+		}
+		return pickFromList("Pick project", projects, false)
+	}
+
+	matches := fuzzyMatchProjects(query, projects)
+	if len(matches) > 0 {
+		if len(matches) == 1 {
+			return matches[0], nil
+		}
+		return pickFromList("Pick project match", matches, false)
+	}
+
+	ok, err := confirm("No asset match. Try new pull? [y/N]: ")
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", errors.New("selection cancelled")
+	}
+	return query, nil
+}
+
+func fuzzyMatchProjects(query string, projects []string) []string {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return append([]string(nil), projects...)
+	}
+	out := make([]string, 0, len(projects))
+	for _, project := range projects {
+		name := strings.ToLower(project)
+		if strings.Contains(name, query) || isSubsequence(query, name) {
+			out = append(out, project)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func isSubsequence(query, target string) bool {
+	if query == "" {
+		return true
+	}
+	j := 0
+	for i := 0; i < len(target) && j < len(query); i++ {
+		if target[i] == query[j] {
+			j++
+		}
+	}
+	return j == len(query)
 }
 
 func copyTree(src, dst string) error {
@@ -412,7 +530,7 @@ func listAssetProjects(assetsDir string) ([]string, error) {
 	entries, err := os.ReadDir(assetsDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, errors.New("assets folder does not exist")
+			return []string{}, nil
 		}
 		return nil, err
 	}
@@ -423,18 +541,7 @@ func listAssetProjects(assetsDir string) ([]string, error) {
 		}
 	}
 	sort.Strings(projects)
-	if len(projects) == 0 {
-		return nil, errors.New("no project folders found in assets")
-	}
 	return projects, nil
-}
-
-func pickFromAssets(assetsDir string) (string, error) {
-	projects, err := listAssetProjects(assetsDir)
-	if err != nil {
-		return "", err
-	}
-	return pickFromList("Pick project", projects, false)
 }
 
 func writeToml(path string, v any) error {
