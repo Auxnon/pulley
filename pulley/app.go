@@ -103,6 +103,7 @@ func (a *App) Run(args []string) error {
 		}
 		repo = selected
 	}
+	fmt.Println(formatPullRepoMessage(repo))
 
 	return a.pullRepo(repo)
 }
@@ -128,7 +129,11 @@ func (a *App) pullRepo(repo string) error {
 		}
 	}
 	cloneURL := buildCloneURL(source, repo)
-	destName, err := promptDestinationName(a.PullRoot, repo)
+	ticket, err := promptTicketNumber()
+	if err != nil {
+		return err
+	}
+	destName, err := promptDestinationName(a.PullRoot, ticket, repo)
 	if err != nil {
 		return err
 	}
@@ -157,13 +162,9 @@ func (a *App) pullRepo(repo string) error {
 	if err != nil {
 		return err
 	}
-	newBranch, err := promptInput("Name your branch", "")
+	newBranch, err := promptBranchName(ticket)
 	if err != nil {
 		return err
-	}
-	newBranch = strings.TrimSpace(newBranch)
-	if newBranch == "" {
-		return errors.New("branch name cannot be empty")
 	}
 	if err := runCmd(destPath, "git", "switch", "-c", newBranch, baseBranch); err != nil {
 		return err
@@ -248,19 +249,62 @@ func (a *App) promptAndSaveSource() (string, error) {
 	return source, nil
 }
 
-func promptDestinationName(root, repo string) (string, error) {
+func formatPullRepoMessage(repo string) string {
+	return fmt.Sprintf("Pulling repo: %s", repo)
+}
+
+func promptTicketNumber() (string, error) {
+	ticket, err := promptInput("Ticket number", "")
+	if err != nil {
+		return "", err
+	}
+	ticket = strings.TrimSpace(ticket)
+	if ticket == "" {
+		return "", errors.New("ticket number cannot be empty")
+	}
+	return ticket, nil
+}
+
+func ticketPrefixedName(ticket, name string) (string, error) {
+	ticket = strings.TrimSpace(ticket)
+	name = strings.TrimSpace(name)
+	if ticket == "" {
+		return "", errors.New("ticket number cannot be empty")
+	}
+	if name == "" {
+		return "", errors.New("name cannot be empty")
+	}
+	return fmt.Sprintf("%s-%s", ticket, name), nil
+}
+
+func promptDestinationName(root, ticket, repo string) (string, error) {
 	choice, err := promptInput("Custom folder name (leave empty for auto)", "")
 	if err != nil {
 		return "", err
 	}
 	choice = strings.TrimSpace(choice)
 	if choice == "" {
-		return nextAvailableName(root, repo), nil
+		choice = repo
 	}
-	if _, err := os.Stat(filepath.Join(root, choice)); err == nil {
-		return nextAvailableName(root, choice), nil
+	prefixed, err := ticketPrefixedName(ticket, choice)
+	if err != nil {
+		return "", err
 	}
-	return choice, nil
+	fmt.Printf("Folder preview: %s\n", prefixed)
+	return nextAvailableName(root, prefixed), nil
+}
+
+func promptBranchName(ticket string) (string, error) {
+	branchSuffix, err := promptInput("Name your branch", "")
+	if err != nil {
+		return "", err
+	}
+	branch, err := ticketPrefixedName(ticket, branchSuffix)
+	if err != nil {
+		return "", errors.New("branch name cannot be empty")
+	}
+	fmt.Printf("Branch preview: %s\n", branch)
+	return branch, nil
 }
 
 func nextAvailableName(root, base string) string {

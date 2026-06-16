@@ -52,6 +52,32 @@ func TestNextAvailableName(t *testing.T) {
 	}
 }
 
+func TestFormatPullRepoMessage(t *testing.T) {
+	got := formatPullRepoMessage("ec-backend")
+	if got != "Pulling repo: ec-backend" {
+		t.Fatalf("unexpected message: %s", got)
+	}
+}
+
+func TestTicketPrefixedName(t *testing.T) {
+	got, err := ticketPrefixedName("123", "backend")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if got != "123-backend" {
+		t.Fatalf("expected 123-backend, got %s", got)
+	}
+}
+
+func TestTicketPrefixedNameRejectsEmptyTicketOrName(t *testing.T) {
+	if _, err := ticketPrefixedName("", "backend"); err == nil {
+		t.Fatal("expected error for empty ticket")
+	}
+	if _, err := ticketPrefixedName("123", ""); err == nil {
+		t.Fatal("expected error for empty name")
+	}
+}
+
 func TestCopyTreeCopiesDotfiles(t *testing.T) {
 	src := t.TempDir()
 	dst := t.TempDir()
