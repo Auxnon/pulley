@@ -292,15 +292,15 @@ func promptDestinationName(root, ticket, repo string) (string, error) {
 }
 
 func promptBranchName(ticket string) (string, error) {
-	branchSuffix, err := promptInput("Name your branch", "")
+	branchBase, err := promptInput("Name your branch", "")
 	if err != nil {
 		return "", err
 	}
-	branchSuffix = strings.TrimSpace(branchSuffix)
-	if branchSuffix == "" {
+	branchBase = strings.TrimSpace(branchBase)
+	if branchBase == "" {
 		return "", errors.New("branch name cannot be empty")
 	}
-	branch, err := ticketPrefixedName(ticket, branchSuffix)
+	branch, err := ticketPrefixedName(ticket, branchBase)
 	if err != nil {
 		return "", fmt.Errorf("invalid branch name: %w", err)
 	}
