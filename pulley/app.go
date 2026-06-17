@@ -735,12 +735,22 @@ func (a *App) runTaskSelector() error {
 		if err != nil {
 			return err
 		}
-		cfg.Tasks[idx].Description = strings.TrimSpace(updated.Description)
-		cfg.Tasks[idx].Branch = strings.TrimSpace(updated.Branch)
-		cfg.Tasks[idx].Path = strings.TrimSpace(updated.Path)
-		cfg.Tasks[idx].Repo = strings.TrimSpace(updated.Repo)
-		if cfg.Tasks[idx].Branch == "" || cfg.Tasks[idx].Path == "" || cfg.Tasks[idx].Repo == "" {
-			return errors.New("branch, path, and repo cannot be empty")
+		cfg.Tasks[idx].Description = updated.Description
+		cfg.Tasks[idx].Branch = updated.Branch
+		cfg.Tasks[idx].Path = updated.Path
+		cfg.Tasks[idx].Repo = updated.Repo
+		missing := make([]string, 0, 3)
+		if cfg.Tasks[idx].Branch == "" {
+			missing = append(missing, "branch")
+		}
+		if cfg.Tasks[idx].Path == "" {
+			missing = append(missing, "path")
+		}
+		if cfg.Tasks[idx].Repo == "" {
+			missing = append(missing, "repo")
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("task field cannot be empty: %s", strings.Join(missing, ", "))
 		}
 		return writeToml(a.TasksToml, cfg)
 	}
@@ -804,7 +814,7 @@ func (a *App) renameCurrentTask(nameArg string) error {
 		return errors.New("new folder name cannot be empty")
 	}
 	newPath := filepath.Join(filepath.Dir(cleanCwd), name)
-	if filepath.Clean(newPath) == cleanCwd {
+	if newPath == cleanCwd {
 		return errors.New("new folder name matches current directory")
 	}
 	if _, err := os.Stat(newPath); err == nil {
@@ -876,10 +886,10 @@ func promptTaskDescription(existing string) (string, error) {
 
 func promptTaskEditor(current Task) (Task, error) {
 	updated := Task{
-		Description: strings.TrimSpace(current.Description),
-		Branch:      strings.TrimSpace(current.Branch),
-		Path:        strings.TrimSpace(current.Path),
-		Repo:        strings.TrimSpace(current.Repo),
+		Description: current.Description,
+		Branch:      current.Branch,
+		Path:        current.Path,
+		Repo:        current.Repo,
 	}
 	form := huh.NewForm(
 		huh.NewGroup(
