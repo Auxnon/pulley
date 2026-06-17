@@ -118,6 +118,23 @@ func TestMenuModelArrowKeysExitFilteringWithoutTypedFilter(t *testing.T) {
 	}
 }
 
+func TestMenuModelEKeyEditsSelectedItem(t *testing.T) {
+	items := []list.Item{
+		menuItem{title: "repo-a"},
+	}
+	l := list.New(items, newMenuDelegate(false), 60, 14)
+	model := menuModel{list: l}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	editModel := updated.(menuModel)
+	if editModel.action != "edit" {
+		t.Fatalf("expected edit action, got %q", editModel.action)
+	}
+	if editModel.selection != "repo-a" {
+		t.Fatalf("expected selected repo-a, got %q", editModel.selection)
+	}
+}
+
 func TestMenuModelWindowSizeUsesTerminalSpan(t *testing.T) {
 	items := []list.Item{menuItem{title: "repo"}}
 	l := list.New(items, newMenuDelegate(false), 0, 0)

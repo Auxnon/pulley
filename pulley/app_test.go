@@ -348,6 +348,21 @@ func TestTaskMenuItemUsesDescriptionOutsideFilter(t *testing.T) {
 	}
 }
 
+func TestTaskMenuItemUsesCustomDescriptionWhenPresent(t *testing.T) {
+	item := taskMenuItem(Task{
+		Branch:      "feat/a",
+		Repo:        "ec-backend",
+		Path:        "/very/long/path/to/workspaces/backend/service",
+		Description: "sync billing webhooks",
+	}, 0)
+	if item.Description() != "sync billing webhooks" {
+		t.Fatalf("unexpected custom description: %s", item.Description())
+	}
+	if item.FilterValue() != "feat/a -> /very/long/path/to/workspaces/backend/service" {
+		t.Fatalf("unexpected filter value: %s", item.FilterValue())
+	}
+}
+
 func TestCurrentGitTaskErrorsOutsideGitRepo(t *testing.T) {
 	tmp := t.TempDir()
 	origWD, err := os.Getwd()
@@ -365,6 +380,10 @@ func TestCurrentGitTaskErrorsOutsideGitRepo(t *testing.T) {
 }
 
 func TestAddCurrentTaskPersistsCurrentGitBranchAndPath(t *testing.T) {
+	origPromptTaskDesc := promptTaskDesc
+	promptTaskDesc = func(existing string) (string, error) { return "manual task desc", nil }
+	t.Cleanup(func() { promptTaskDesc = origPromptTaskDesc })
+
 	repo := t.TempDir()
 	run := func(args ...string) {
 		t.Helper()
@@ -426,9 +445,16 @@ func TestAddCurrentTaskPersistsCurrentGitBranchAndPath(t *testing.T) {
 	if cfg.Tasks[0].Repo != filepath.Base(repo) {
 		t.Fatalf("expected repo %s, got %s", filepath.Base(repo), cfg.Tasks[0].Repo)
 	}
+	if cfg.Tasks[0].Description != "manual task desc" {
+		t.Fatalf("expected saved description, got %q", cfg.Tasks[0].Description)
+	}
 }
 
 func TestAddCurrentTaskUsesCurrentSubfolderPath(t *testing.T) {
+	origPromptTaskDesc := promptTaskDesc
+	promptTaskDesc = func(existing string) (string, error) { return "", nil }
+	t.Cleanup(func() { promptTaskDesc = origPromptTaskDesc })
+
 	repo := t.TempDir()
 	run := func(args ...string) {
 		t.Helper()
@@ -488,6 +514,30 @@ func TestAddCurrentTaskUsesCurrentSubfolderPath(t *testing.T) {
 	}
 	if cfg.Tasks[0].Path != subdir {
 		t.Fatalf("expected task path to be current folder %s, got %s", subdir, cfg.Tasks[0].Path)
+	}
+}
+
+func TestWriteTomlOmitsEmptyTaskDescription(t *testing.T) {
+	root := t.TempDir()
+	tasksPath := filepath.Join(root, "tasks.toml")
+	cfg := taskConfig{
+		Tasks: []Task{
+			{Branch: "feat/a", Path: "/tmp/repo", Repo: "repo", Description: "has desc"},
+		},
+	}
+	if err := writeToml(tasksPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Tasks[0].Description = ""
+	if err := writeToml(tasksPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(tasksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "description =") {
+		t.Fatalf("expected empty description to be removed from tasks.toml, got:\n%s", string(raw))
 	}
 }
 

@@ -77,6 +77,12 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.action = "select"
 				return m, tea.Quit
 			}
+		case "e":
+			if it, ok := m.list.SelectedItem().(menuItem); ok {
+				m.selection = it.selectionValue()
+				m.action = "edit"
+				return m, tea.Quit
+			}
 		case "x":
 			if it, ok := m.list.SelectedItem().(menuItem); ok {
 				m.selection = it.selectionValue()
@@ -130,15 +136,19 @@ func runMenu(title string, options []string, canDelete bool) (string, string, er
 	return result.selection, result.action, nil
 }
 
-func runDetailedMenu(title string, options []menuItem, canDelete bool) (string, string, error) {
+func runDetailedMenu(title string, options []menuItem, canDelete bool, canEdit bool) (string, string, error) {
 	items := make([]list.Item, 0, len(options))
 	for _, opt := range options {
 		items = append(items, opt)
 	}
 	l := list.New(items, newMenuDelegate(true), 0, 0)
 	l.Title = title
-	if canDelete {
+	if canDelete && canEdit {
+		l.Title = title + " (x to delete, e to edit)"
+	} else if canDelete {
 		l.Title = title + " (x to delete)"
+	} else if canEdit {
+		l.Title = title + " (e to edit)"
 	}
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)

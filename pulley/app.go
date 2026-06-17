@@ -27,6 +27,7 @@ var (
 	evalSymlinks   = filepath.EvalSymlinks
 	userHomeDir    = os.UserHomeDir
 	lookPath       = exec.LookPath
+	promptTaskDesc = promptTaskDescription
 )
 
 type App struct {
@@ -34,6 +35,52 @@ type App struct {
 	PullRoot   string
 	SourceToml string
 	TasksToml  string
+}
+
+func promptOptionalInput(label, placeholder string) (string, error) {
+	input, err := promptOptionalInputWithGum(label, placeholder)
+	if err == nil {
+		return input, nil
+	}
+	if !errors.Is(err, exec.ErrNotFound) {
+		return "", err
+	}
+	return promptOptionalInputFallback(label, placeholder)
+}
+
+func promptOptionalInputWithGum(label, placeholder string) (string, error) {
+	if _, err := lookPath("gum"); err != nil {
+		return "", err
+	}
+	args := []string{"input", "--prompt", label + ": "}
+	if placeholder != "" {
+		args = append(args, "--placeholder", placeholder)
+	}
+	cmd := exec.Command("gum", args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func promptOptionalInputFallback(label, placeholder string) (string, error) {
+	fmt.Printf("%s", label)
+	if placeholder != "" {
+		fmt.Printf(" [%s]", placeholder)
+	}
+	fmt.Print(": ")
+	reader := bufio.NewReader(os.Stdin)
+	text, err := reader.ReadString('\n')
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(text), nil
 }
 
 type sourceConfig struct {
@@ -45,10 +92,11 @@ type taskConfig struct {
 }
 
 type Task struct {
-	Branch    string    `toml:"branch"`
-	Path      string    `toml:"path"`
-	Repo      string    `toml:"repo"`
-	CreatedAt time.Time `toml:"created_at"`
+	Branch      string    `toml:"branch"`
+	Path        string    `toml:"path"`
+	Repo        string    `toml:"repo"`
+	Description string    `toml:"description,omitempty"`
+	CreatedAt   time.Time `toml:"created_at"`
 }
 
 func NewDefaultApp() (*App, error) {
@@ -182,7 +230,17 @@ func (a *App) pullRepo(repo string) error {
 		}
 	}
 
-	if err := a.addTask(Task{Branch: newBranch, Path: destPath, Repo: repo, CreatedAt: time.Now().UTC()}); err != nil {
+	description, err := promptTaskDesc("")
+	if err != nil {
+		return err
+	}
+	if err := a.addTask(Task{
+		Branch:      newBranch,
+		Path:        destPath,
+		Repo:        repo,
+		Description: description,
+		CreatedAt:   time.Now().UTC(),
+	}); err != nil {
 		return err
 	}
 
@@ -640,7 +698,7 @@ func (a *App) runTaskSelector() error {
 	for i, t := range cfg.Tasks {
 		options = append(options, taskMenuItem(t, i))
 	}
-	picked, action, err := runDetailedMenu("Pick a task", options, true)
+	picked, action, err := runDetailedMenu("Pick a task", options, true, true)
 	if err != nil {
 		return err
 	}
@@ -663,12 +721,25 @@ func (a *App) runTaskSelector() error {
 		cfg.Tasks = append(cfg.Tasks[:idx], cfg.Tasks[idx+1:]...)
 		return writeToml(a.TasksToml, cfg)
 	}
+	if action == "edit" {
+		current := strings.TrimSpace(cfg.Tasks[idx].Description)
+		updated, err := promptTaskDesc(current)
+		if err != nil {
+			return err
+		}
+		cfg.Tasks[idx].Description = updated
+		return writeToml(a.TasksToml, cfg)
+	}
 
 	return launchShell(cfg.Tasks[idx].Path)
 }
 
 func (a *App) addCurrentTask() error {
 	t, err := currentGitTask()
+	if err != nil {
+		return err
+	}
+	t.Description, err = promptTaskDesc("")
 	if err != nil {
 		return err
 	}
@@ -710,13 +781,24 @@ func taskDisplayName(t Task) string {
 
 func taskMenuItem(t Task, index int) menuItem {
 	title := taskDisplayName(t)
-	description := fmt.Sprintf("repo: %s | path: %s", t.Repo, t.Path)
+	description := strings.TrimSpace(t.Description)
+	if description == "" {
+		description = fmt.Sprintf("repo: %s | path: %s", t.Repo, t.Path)
+	}
 	return menuItem{
 		title:       title,
 		description: description,
 		filterValue: title,
 		value:       strconv.Itoa(index),
 	}
+}
+
+func promptTaskDescription(existing string) (string, error) {
+	description, err := promptOptionalInput("Task description (optional)", existing)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(description), nil
 }
 
 func shortenHomePath(path string) string {
