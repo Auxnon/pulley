@@ -722,7 +722,7 @@ func (a *App) runTaskSelector() error {
 		return writeToml(a.TasksToml, cfg)
 	}
 	if action == "edit" {
-		current := strings.TrimSpace(cfg.Tasks[idx].Description)
+		current := cfg.Tasks[idx].Description
 		updated, err := promptTaskDesc(current)
 		if err != nil {
 			return err
@@ -735,13 +735,20 @@ func (a *App) runTaskSelector() error {
 }
 
 func (a *App) addCurrentTask() error {
-	t, err := currentGitTask()
+	baseTask, err := currentGitTask()
 	if err != nil {
 		return err
 	}
-	t.Description, err = promptTaskDesc("")
+	description, err := promptTaskDesc("")
 	if err != nil {
 		return err
+	}
+	t := Task{
+		Branch:      baseTask.Branch,
+		Path:        baseTask.Path,
+		Repo:        baseTask.Repo,
+		Description: description,
+		CreatedAt:   baseTask.CreatedAt,
 	}
 	if err := a.addTask(t); err != nil {
 		return err
