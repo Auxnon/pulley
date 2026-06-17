@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/charmbracelet/huh"
 )
 
 const (
@@ -28,6 +29,7 @@ var (
 	userHomeDir    = os.UserHomeDir
 	lookPath       = exec.LookPath
 	promptTaskDesc = promptTaskDescription
+	editTaskPrompt = promptTaskEditor
 )
 
 type App struct {
@@ -131,6 +133,13 @@ func (a *App) Run(args []string) error {
 	if len(args) > 0 && args[0] == "task" {
 		if len(args) > 1 && args[1] == "add" {
 			return a.addCurrentTask()
+		}
+		if len(args) > 1 && args[1] == "rename" {
+			name := ""
+			if len(args) > 2 {
+				name = args[2]
+			}
+			return a.renameCurrentTask(name)
 		}
 		return a.runTaskSelector()
 	}
@@ -722,12 +731,17 @@ func (a *App) runTaskSelector() error {
 		return writeToml(a.TasksToml, cfg)
 	}
 	if action == "edit" {
-		current := cfg.Tasks[idx].Description
-		updated, err := promptTaskDesc(current)
+		updated, err := editTaskPrompt(cfg.Tasks[idx])
 		if err != nil {
 			return err
 		}
-		cfg.Tasks[idx].Description = updated
+		cfg.Tasks[idx].Description = strings.TrimSpace(updated.Description)
+		cfg.Tasks[idx].Branch = strings.TrimSpace(updated.Branch)
+		cfg.Tasks[idx].Path = strings.TrimSpace(updated.Path)
+		cfg.Tasks[idx].Repo = strings.TrimSpace(updated.Repo)
+		if cfg.Tasks[idx].Branch == "" || cfg.Tasks[idx].Path == "" || cfg.Tasks[idx].Repo == "" {
+			return errors.New("branch, path, and repo cannot be empty")
+		}
 		return writeToml(a.TasksToml, cfg)
 	}
 
@@ -754,6 +768,58 @@ func (a *App) addCurrentTask() error {
 		return err
 	}
 	fmt.Printf("Added task: %s\n", taskDisplayName(t))
+	return nil
+}
+
+func (a *App) renameCurrentTask(nameArg string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	cfg, err := a.loadTasks()
+	if err != nil {
+		return err
+	}
+	cleanCwd := filepath.Clean(cwd)
+	match := -1
+	for i, t := range cfg.Tasks {
+		if filepath.Clean(t.Path) == cleanCwd {
+			match = i
+			break
+		}
+	}
+	if match < 0 {
+		return errors.New("current directory is not listed in tasks.toml")
+	}
+
+	name := strings.TrimSpace(nameArg)
+	if name == "" {
+		name, err = promptOptionalInput("New folder name", filepath.Base(cleanCwd))
+		if err != nil {
+			return err
+		}
+		name = strings.TrimSpace(name)
+	}
+	if name == "" {
+		return errors.New("new folder name cannot be empty")
+	}
+	newPath := filepath.Join(filepath.Dir(cleanCwd), name)
+	if filepath.Clean(newPath) == cleanCwd {
+		return errors.New("new folder name matches current directory")
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		return fmt.Errorf("destination already exists: %s", newPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Rename(cleanCwd, newPath); err != nil {
+		return err
+	}
+	cfg.Tasks[match].Path = newPath
+	if err := writeToml(a.TasksToml, cfg); err != nil {
+		return err
+	}
+	fmt.Printf("Renamed task path: %s -> %s\n", cleanCwd, newPath)
 	return nil
 }
 
@@ -806,6 +872,43 @@ func promptTaskDescription(existing string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(description), nil
+}
+
+func promptTaskEditor(current Task) (Task, error) {
+	updated := Task{
+		Description: strings.TrimSpace(current.Description),
+		Branch:      strings.TrimSpace(current.Branch),
+		Path:        strings.TrimSpace(current.Path),
+		Repo:        strings.TrimSpace(current.Repo),
+	}
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewText().
+				Title("Description (optional)").
+				Placeholder("Describe this task").
+				Value(&updated.Description),
+			huh.NewInput().
+				Title("Branch").
+				Placeholder("feature/my-task").
+				Value(&updated.Branch),
+			huh.NewInput().
+				Title("Path").
+				Placeholder("/abs/path/to/repo").
+				Value(&updated.Path),
+			huh.NewInput().
+				Title("Repo").
+				Placeholder("repo-name").
+				Value(&updated.Repo),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return Task{}, err
+	}
+	updated.Description = strings.TrimSpace(updated.Description)
+	updated.Branch = strings.TrimSpace(updated.Branch)
+	updated.Path = strings.TrimSpace(updated.Path)
+	updated.Repo = strings.TrimSpace(updated.Repo)
+	return updated, nil
 }
 
 func shortenHomePath(path string) string {

@@ -1,6 +1,7 @@
 package pulley
 
 import (
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -538,6 +539,77 @@ func TestWriteTomlOmitsEmptyTaskDescription(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "description =") {
 		t.Fatalf("expected empty description to be removed from tasks.toml, got:\n%s", string(raw))
+	}
+}
+
+func TestRenameCurrentTaskRenamesDirectoryAndUpdatesTaskPath(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tasksToml := filepath.Join(root, "tasks.toml")
+	app := &App{TasksToml: tasksToml}
+	if err := app.addTask(Task{Branch: "feat/a", Path: repo, Repo: "repo"}); err != nil {
+		t.Fatal(err)
+	}
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.renameCurrentTask("repo-renamed"); err != nil {
+		t.Fatalf("expected rename to succeed, got %v", err)
+	}
+
+	renamed := filepath.Join(root, "repo-renamed")
+	if _, err := os.Stat(renamed); err != nil {
+		t.Fatalf("expected renamed folder to exist: %v", err)
+	}
+	if _, err := os.Stat(repo); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected old folder to be gone, got err=%v", err)
+	}
+
+	cfg, err := app.loadTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tasks) != 1 {
+		t.Fatalf("expected one task, got %d", len(cfg.Tasks))
+	}
+	if got := cfg.Tasks[0].Path; got != renamed {
+		t.Fatalf("expected updated task path %q, got %q", renamed, got)
+	}
+}
+
+func TestRenameCurrentTaskErrorsWhenCurrentDirNotListed(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{TasksToml: filepath.Join(root, "tasks.toml")}
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+
+	err = app.renameCurrentTask("repo-renamed")
+	if err == nil {
+		t.Fatal("expected error when current dir is not listed in tasks")
+	}
+	if !strings.Contains(err.Error(), "not listed") {
+		t.Fatalf("expected not listed error, got %v", err)
 	}
 }
 
