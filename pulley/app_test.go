@@ -114,6 +114,38 @@ func TestDestinationNameFromChoiceKeepsAlreadyPrefixedName(t *testing.T) {
 	}
 }
 
+func TestBranchNameFromChoiceUsesBaseBranchWhenEmpty(t *testing.T) {
+	got, createNew, err := branchNameFromChoice("1234", "main", "")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if createNew {
+		t.Fatal("expected no new branch to be created")
+	}
+	if got != "main" {
+		t.Fatalf("expected base branch main, got %s", got)
+	}
+}
+
+func TestBranchNameFromChoicePrefixesCustomBranchName(t *testing.T) {
+	got, createNew, err := branchNameFromChoice("1234", "main", "add-search")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !createNew {
+		t.Fatal("expected a new branch to be created")
+	}
+	if got != "1234-add-search" {
+		t.Fatalf("expected ticket-prefixed branch name, got %s", got)
+	}
+}
+
+func TestBranchNameFromChoiceRejectsEmptyBaseBranchWhenChoiceEmpty(t *testing.T) {
+	if _, _, err := branchNameFromChoice("1234", "", ""); err == nil {
+		t.Fatal("expected error for empty source branch")
+	}
+}
+
 func TestCopyTreeCopiesDotfiles(t *testing.T) {
 	src := t.TempDir()
 	dst := t.TempDir()

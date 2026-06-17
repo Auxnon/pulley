@@ -166,13 +166,19 @@ func (a *App) pullRepo(repo string) error {
 	if err != nil {
 		return err
 	}
-	newBranch, err := promptBranchName(ticket)
+	newBranch, createNewBranch, err := promptBranchName(ticket, baseBranch)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("%s -> %s\n", baseBranch, newBranch)
-	if err := runCmd(destPath, "git", "switch", "-c", newBranch, baseBranch); err != nil {
-		return err
+	if createNewBranch {
+		if err := runCmd(destPath, "git", "switch", "-c", newBranch, baseBranch); err != nil {
+			return err
+		}
+	} else {
+		if err := runCmd(destPath, "git", "switch", baseBranch); err != nil {
+			return err
+		}
 	}
 
 	if err := a.addTask(Task{Branch: newBranch, Path: destPath, Repo: repo, CreatedAt: time.Now().UTC()}); err != nil {
@@ -309,21 +315,33 @@ func destinationNameFromChoice(ticket, autoName, choice string) (string, error) 
 	return ticketPrefixedName(ticket, choice)
 }
 
-func promptBranchName(ticket string) (string, error) {
-	branchBase, err := promptInput("Name your branch", "")
+func promptBranchName(ticket, baseBranch string) (string, bool, error) {
+	branchBase, err := promptInput("Name your branch (leave empty for source branch)", "")
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	branchBase = strings.TrimSpace(branchBase)
-	if branchBase == "" {
-		return "", errors.New("branch name cannot be empty")
-	}
-	branch, err := ticketPrefixedName(ticket, branchBase)
+	branch, createNewBranch, err := branchNameFromChoice(ticket, baseBranch, branchBase)
 	if err != nil {
-		return "", fmt.Errorf("invalid branch name: %w", err)
+		return "", false, err
 	}
 	fmt.Printf("Branch preview: %s\n", branch)
-	return branch, nil
+	return branch, createNewBranch, nil
+}
+
+func branchNameFromChoice(ticket, baseBranch, choice string) (string, bool, error) {
+	choice = strings.TrimSpace(choice)
+	if choice == "" {
+		baseBranch = strings.TrimSpace(baseBranch)
+		if baseBranch == "" {
+			return "", false, errors.New("source branch cannot be empty")
+		}
+		return baseBranch, false, nil
+	}
+	branch, err := ticketPrefixedName(ticket, choice)
+	if err != nil {
+		return "", false, fmt.Errorf("invalid branch name: %w", err)
+	}
+	return branch, true, nil
 }
 
 func nextAvailableName(root, base string) string {
