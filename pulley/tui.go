@@ -7,11 +7,29 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type menuItem struct{ title string }
+type menuItem struct {
+	title       string
+	description string
+	filterValue string
+	value       string
+}
 
-func (m menuItem) FilterValue() string { return m.title }
-func (m menuItem) Title() string       { return m.title }
-func (m menuItem) Description() string { return "" }
+func (m menuItem) FilterValue() string {
+	if m.filterValue != "" {
+		return m.filterValue
+	}
+	return m.title
+}
+func (m menuItem) Title() string { return m.title }
+func (m menuItem) Description() string {
+	return m.description
+}
+func (m menuItem) selectionValue() string {
+	if m.value != "" {
+		return m.value
+	}
+	return m.title
+}
 
 type menuModel struct {
 	list      list.Model
@@ -44,7 +62,7 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.list.FilterState() == list.Filtering {
 			if msg.String() == "enter" {
 				if it, ok := m.list.SelectedItem().(menuItem); ok {
-					m.selection = it.title
+					m.selection = it.selectionValue()
 					m.action = "select"
 					return m, tea.Quit
 				}
@@ -55,13 +73,13 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "enter":
 			if it, ok := m.list.SelectedItem().(menuItem); ok {
-				m.selection = it.title
+				m.selection = it.selectionValue()
 				m.action = "select"
 				return m, tea.Quit
 			}
 		case "x":
 			if it, ok := m.list.SelectedItem().(menuItem); ok {
-				m.selection = it.title
+				m.selection = it.selectionValue()
 				m.action = "delete"
 				return m, tea.Quit
 			}
@@ -91,9 +109,9 @@ func pickWithDelete(title string, options []string) (string, string, error) {
 func runMenu(title string, options []string, canDelete bool) (string, string, error) {
 	items := make([]list.Item, 0, len(options))
 	for _, opt := range options {
-		items = append(items, menuItem{title: opt})
+		items = append(items, menuItem{title: opt, value: opt})
 	}
-	l := list.New(items, newMenuDelegate(), 0, 0)
+	l := list.New(items, newMenuDelegate(false), 0, 0)
 	l.Title = title
 	if canDelete {
 		l.Title = title + " (x to delete)"
@@ -112,9 +130,33 @@ func runMenu(title string, options []string, canDelete bool) (string, string, er
 	return result.selection, result.action, nil
 }
 
-func newMenuDelegate() list.DefaultDelegate {
+func runDetailedMenu(title string, options []menuItem, canDelete bool) (string, string, error) {
+	items := make([]list.Item, 0, len(options))
+	for _, opt := range options {
+		items = append(items, opt)
+	}
+	l := list.New(items, newMenuDelegate(true), 0, 0)
+	l.Title = title
+	if canDelete {
+		l.Title = title + " (x to delete)"
+	}
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	model := menuModel{list: l}
+	finalModel, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
+	if err != nil {
+		return "", "", err
+	}
+	result, ok := finalModel.(menuModel)
+	if !ok || result.action == "cancel" || result.selection == "" {
+		return "", "", errors.New("selection cancelled")
+	}
+	return result.selection, result.action, nil
+}
+
+func newMenuDelegate(showDescription bool) list.DefaultDelegate {
 	delegate := list.NewDefaultDelegate()
-	delegate.ShowDescription = false
+	delegate.ShowDescription = showDescription
 	delegate.SetSpacing(0)
 	return delegate
 }

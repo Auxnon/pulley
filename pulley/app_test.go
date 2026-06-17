@@ -330,6 +330,24 @@ func TestTaskDisplayNameShortensHomePath(t *testing.T) {
 	}
 }
 
+func TestTaskMenuItemUsesDescriptionOutsideFilter(t *testing.T) {
+	item := taskMenuItem(Task{
+		Branch: "feat/a",
+		Repo:   "ec-backend",
+		Path:   "/very/long/path/to/workspaces/backend/service",
+	}, 3)
+
+	if item.FilterValue() != "feat/a -> /very/long/path/to/workspaces/backend/service" {
+		t.Fatalf("unexpected filter value: %s", item.FilterValue())
+	}
+	if item.Description() != "repo: ec-backend | path: /very/long/path/to/workspaces/backend/service" {
+		t.Fatalf("unexpected description: %s", item.Description())
+	}
+	if got := item.selectionValue(); got != "3" {
+		t.Fatalf("expected selection value 3, got %s", got)
+	}
+}
+
 func TestCurrentGitTaskErrorsOutsideGitRepo(t *testing.T) {
 	tmp := t.TempDir()
 	origWD, err := os.Getwd()

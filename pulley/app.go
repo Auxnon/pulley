@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -635,19 +636,16 @@ func (a *App) runTaskSelector() error {
 	if len(cfg.Tasks) == 0 {
 		return errors.New("no tasks yet")
 	}
-	options := make([]string, 0, len(cfg.Tasks))
-	indexByName := make(map[string]int, len(cfg.Tasks))
+	options := make([]menuItem, 0, len(cfg.Tasks))
 	for i, t := range cfg.Tasks {
-		name := taskDisplayName(t)
-		options = append(options, name)
-		indexByName[name] = i
+		options = append(options, taskMenuItem(t, i))
 	}
-	picked, action, err := pickWithDelete("Pick a task", options)
+	picked, action, err := runDetailedMenu("Pick a task", options, true)
 	if err != nil {
 		return err
 	}
-	idx, ok := indexByName[picked]
-	if !ok {
+	idx, err := strconv.Atoi(picked)
+	if err != nil || idx < 0 || idx >= len(cfg.Tasks) {
 		return errors.New("invalid selection")
 	}
 
@@ -708,6 +706,17 @@ func currentGitTask() (Task, error) {
 
 func taskDisplayName(t Task) string {
 	return fmt.Sprintf("%s -> %s", t.Branch, shortenHomePath(t.Path))
+}
+
+func taskMenuItem(t Task, index int) menuItem {
+	title := taskDisplayName(t)
+	description := fmt.Sprintf("repo: %s | path: %s", t.Repo, t.Path)
+	return menuItem{
+		title:       title,
+		description: description,
+		filterValue: title,
+		value:       strconv.Itoa(index),
+	}
 }
 
 func shortenHomePath(path string) string {

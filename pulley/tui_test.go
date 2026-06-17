@@ -8,12 +8,19 @@ import (
 )
 
 func TestNewMenuDelegateIsFlush(t *testing.T) {
-	delegate := newMenuDelegate()
+	delegate := newMenuDelegate(false)
 	if delegate.ShowDescription {
 		t.Fatal("expected descriptions to be hidden")
 	}
 	if spacing := delegate.Spacing(); spacing != 0 {
 		t.Fatalf("expected spacing 0, got %d", spacing)
+	}
+}
+
+func TestNewMenuDelegateCanShowDescriptions(t *testing.T) {
+	delegate := newMenuDelegate(true)
+	if !delegate.ShowDescription {
+		t.Fatal("expected descriptions to be shown")
 	}
 }
 
@@ -36,7 +43,7 @@ func TestMenuModelInitStartsFiltering(t *testing.T) {
 
 func TestMenuModelEnterSelectsWhileFiltering(t *testing.T) {
 	items := []list.Item{menuItem{title: "repo"}}
-	l := list.New(items, newMenuDelegate(), 60, 14)
+	l := list.New(items, newMenuDelegate(false), 60, 14)
 	l.SetFilteringEnabled(true)
 
 	model := menuModel{list: l}
@@ -58,7 +65,7 @@ func TestMenuModelArrowKeysExitFilteringForBrowse(t *testing.T) {
 		menuItem{title: "repo-a"},
 		menuItem{title: "repo-b"},
 	}
-	l := list.New(items, newMenuDelegate(), 60, 14)
+	l := list.New(items, newMenuDelegate(false), 60, 14)
 	l.SetFilteringEnabled(true)
 
 	model := menuModel{list: l}
@@ -91,7 +98,7 @@ func TestMenuModelArrowKeysExitFilteringWithoutTypedFilter(t *testing.T) {
 		menuItem{title: "repo-a"},
 		menuItem{title: "repo-b"},
 	}
-	l := list.New(items, newMenuDelegate(), 60, 14)
+	l := list.New(items, newMenuDelegate(false), 60, 14)
 	l.SetFilteringEnabled(true)
 
 	model := menuModel{list: l}
@@ -113,7 +120,7 @@ func TestMenuModelArrowKeysExitFilteringWithoutTypedFilter(t *testing.T) {
 
 func TestMenuModelWindowSizeUsesTerminalSpan(t *testing.T) {
 	items := []list.Item{menuItem{title: "repo"}}
-	l := list.New(items, newMenuDelegate(), 0, 0)
+	l := list.New(items, newMenuDelegate(false), 0, 0)
 	model := menuModel{list: l}
 
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
