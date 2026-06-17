@@ -333,7 +333,7 @@ func branchNameFromChoice(ticket, baseBranch, choice string) (string, bool, erro
 	if choice == "" {
 		baseBranch = strings.TrimSpace(baseBranch)
 		if baseBranch == "" {
-			return "", false, errors.New("source branch cannot be empty")
+			return "", false, errors.New("base branch cannot be empty")
 		}
 		return baseBranch, false, nil
 	}
@@ -347,8 +347,13 @@ func branchNameFromChoice(ticket, baseBranch, choice string) (string, bool, erro
 func switchToExistingBranch(repoPath, branch string) error {
 	if err := runCmd(repoPath, "git", "switch", branch); err == nil {
 		return nil
+	} else {
+		fmt.Printf("Branch %s not found locally, tracking origin/%s\n", branch, branch)
+		if trackErr := runCmd(repoPath, "git", "switch", "--track", "origin/"+branch); trackErr != nil {
+			return fmt.Errorf("switch to %s failed: %w", branch, trackErr)
+		}
+		return nil
 	}
-	return runCmd(repoPath, "git", "switch", "--track", "origin/"+branch)
 }
 
 func nextAvailableName(root, base string) string {
