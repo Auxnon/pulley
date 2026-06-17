@@ -86,6 +86,31 @@ func TestMenuModelArrowKeysExitFilteringForBrowse(t *testing.T) {
 	}
 }
 
+func TestMenuModelArrowKeysExitFilteringWithoutTypedFilter(t *testing.T) {
+	items := []list.Item{
+		menuItem{title: "repo-a"},
+		menuItem{title: "repo-b"},
+	}
+	l := list.New(items, newMenuDelegate(), 60, 14)
+	l.SetFilteringEnabled(true)
+
+	model := menuModel{list: l}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	filteringModel := updated.(menuModel)
+	if filteringModel.list.FilterState() != list.Filtering {
+		t.Fatalf("expected filtering state, got %v", filteringModel.list.FilterState())
+	}
+
+	updated, _ = filteringModel.Update(tea.KeyMsg{Type: tea.KeyDown})
+	browsingModel := updated.(menuModel)
+	if browsingModel.list.FilterState() == list.Filtering {
+		t.Fatalf("expected filtering to end on arrow navigation, got %v", browsingModel.list.FilterState())
+	}
+	if got := browsingModel.list.Index(); got != 1 {
+		t.Fatalf("expected cursor to move to second item, got index %d", got)
+	}
+}
+
 func TestMenuModelWindowSizeUsesTerminalSpan(t *testing.T) {
 	items := []list.Item{menuItem{title: "repo"}}
 	l := list.New(items, newMenuDelegate(), 0, 0)
