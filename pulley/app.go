@@ -176,7 +176,7 @@ func (a *App) pullRepo(repo string) error {
 			return err
 		}
 	} else {
-		if err := runCmd(destPath, "git", "switch", newBranch); err != nil {
+		if err := switchToExistingBranch(destPath, newBranch); err != nil {
 			return err
 		}
 	}
@@ -316,7 +316,7 @@ func destinationNameFromChoice(ticket, autoName, choice string) (string, error) 
 }
 
 func promptBranchName(ticket, baseBranch string) (string, bool, error) {
-	branchBase, err := promptInput("Name your branch (leave empty for source branch)", "")
+	branchBase, err := promptInput("Name your branch (leave empty to use base branch)", "")
 	if err != nil {
 		return "", false, err
 	}
@@ -342,6 +342,13 @@ func branchNameFromChoice(ticket, baseBranch, choice string) (string, bool, erro
 		return "", false, fmt.Errorf("invalid branch name: %w", err)
 	}
 	return branch, true, nil
+}
+
+func switchToExistingBranch(repoPath, branch string) error {
+	if err := runCmd(repoPath, "git", "switch", branch); err == nil {
+		return nil
+	}
+	return runCmd(repoPath, "git", "switch", "--track", "origin/"+branch)
 }
 
 func nextAvailableName(root, base string) string {

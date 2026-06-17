@@ -146,6 +146,61 @@ func TestBranchNameFromChoiceRejectsEmptyBaseBranchWhenChoiceEmpty(t *testing.T)
 	}
 }
 
+func TestSwitchToExistingBranchTracksRemoteWhenLocalMissing(t *testing.T) {
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin.git")
+	if out, err := exec.Command("git", "init", "--bare", origin).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare failed: %v\n%s", err, string(out))
+	}
+
+	seed := filepath.Join(root, "seed")
+	if out, err := exec.Command("git", "clone", origin, seed).CombinedOutput(); err != nil {
+		t.Fatalf("git clone seed failed: %v\n%s", err, string(out))
+	}
+	runSeed := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = seed
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+	runSeed("config", "user.name", "Test User")
+	runSeed("config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runSeed("add", "README.md")
+	runSeed("commit", "-m", "init")
+	runSeed("push", "-u", "origin", "HEAD")
+	runSeed("switch", "-c", "feature/remote")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runSeed("add", "feature.txt")
+	runSeed("commit", "-m", "feature")
+	runSeed("push", "-u", "origin", "feature/remote")
+
+	clone := filepath.Join(root, "clone")
+	if out, err := exec.Command("git", "clone", origin, clone).CombinedOutput(); err != nil {
+		t.Fatalf("git clone test repo failed: %v\n%s", err, string(out))
+	}
+
+	if err := switchToExistingBranch(clone, "feature/remote"); err != nil {
+		t.Fatalf("expected remote tracking switch to succeed, got %v", err)
+	}
+
+	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = clone
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git rev-parse failed: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "feature/remote" {
+		t.Fatalf("expected current branch feature/remote, got %s", got)
+	}
+}
+
 func TestCopyTreeCopiesDotfiles(t *testing.T) {
 	src := t.TempDir()
 	dst := t.TempDir()
