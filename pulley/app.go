@@ -176,7 +176,7 @@ func (a *App) pullRepo(repo string) error {
 			return err
 		}
 	} else {
-		if err := runCmd(destPath, "git", "switch", baseBranch); err != nil {
+		if err := runCmd(destPath, "git", "switch", newBranch); err != nil {
 			return err
 		}
 	}
