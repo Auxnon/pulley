@@ -347,13 +347,12 @@ func branchNameFromChoice(ticket, baseBranch, choice string) (string, bool, erro
 func switchToExistingBranch(repoPath, branch string) error {
 	if err := runCmd(repoPath, "git", "switch", branch); err == nil {
 		return nil
-	} else {
-		fmt.Printf("Branch %s not found locally, tracking origin/%s\n", branch, branch)
-		if trackErr := runCmd(repoPath, "git", "switch", "--track", "origin/"+branch); trackErr != nil {
-			return fmt.Errorf("switch to %s failed: %w", branch, trackErr)
-		}
-		return nil
 	}
+	fmt.Printf("Branch %s not found locally, tracking origin/%s\n", branch, branch)
+	if trackErr := runCmd(repoPath, "git", "switch", "--track", "origin/"+branch); trackErr != nil {
+		return fmt.Errorf("switch to %s failed: %w", branch, trackErr)
+	}
+	return nil
 }
 
 func nextAvailableName(root, base string) string {
