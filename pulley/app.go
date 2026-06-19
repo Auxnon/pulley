@@ -790,8 +790,7 @@ func (a *App) runTaskSelector() error {
 			return errors.New("not running inside a tmux session")
 		}
 		// Collect paths for all tasks sharing the same ticket.
-		paths := make([]string, 0, len(cfg.Tasks))
-		paths = append(paths, cfg.Tasks[idx].Path)
+		paths := []string{cfg.Tasks[idx].Path}
 		for i, t := range cfg.Tasks {
 			if i != idx && t.Ticket == ticket {
 				paths = append(paths, t.Path)
@@ -843,9 +842,11 @@ func inferTicketFromBranch(branch string) string {
 		return ""
 	}
 	prefix := branch[:idx]
-	// Only treat as ticket if the prefix looks like a ticket (alphanumeric, no slashes)
-	if strings.ContainsAny(prefix, "/\\") {
-		return ""
+	// Only treat as ticket if the prefix is purely alphanumeric (no slashes or special chars).
+	for _, r := range prefix {
+		if !('a' <= r && r <= 'z') && !('A' <= r && r <= 'Z') && !('0' <= r && r <= '9') {
+			return ""
+		}
 	}
 	return prefix
 }

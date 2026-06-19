@@ -619,12 +619,13 @@ func TestInferTicketFromBranch(t *testing.T) {
 		want   string
 	}{
 		{"123-add-search", "123"},
-		{"PROJ-456-fix-bug", "PROJ"},
+		{"PROJ-fix-bug", "PROJ"},
 		{"feature/no-ticket", ""},
 		{"main", ""},
 		{"", ""},
 		{"123", ""},
 		{"-leading-dash", ""},
+		{"has space-name", ""},
 	}
 	for _, c := range cases {
 		got := inferTicketFromBranch(c.branch)
