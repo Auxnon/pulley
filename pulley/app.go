@@ -94,6 +94,7 @@ type taskConfig struct {
 }
 
 type Task struct {
+	Ticket      string    `toml:"ticket,omitempty"`
 	Branch      string    `toml:"branch"`
 	Path        string    `toml:"path"`
 	Repo        string    `toml:"repo"`
@@ -244,6 +245,7 @@ func (a *App) pullRepo(repo string) error {
 		return err
 	}
 	if err := a.addTask(Task{
+		Ticket:      ticket,
 		Branch:      newBranch,
 		Path:        destPath,
 		Repo:        repo,
@@ -703,9 +705,33 @@ func (a *App) runTaskSelector() error {
 	if len(cfg.Tasks) == 0 {
 		return errors.New("no tasks yet")
 	}
-	options := make([]menuItem, 0, len(cfg.Tasks))
+
+	// Sort tasks by ticket (empty ticket last), preserving original order within same ticket.
+	type indexedTask struct {
+		task  Task
+		index int
+	}
+	indexed := make([]indexedTask, len(cfg.Tasks))
 	for i, t := range cfg.Tasks {
-		options = append(options, taskMenuItem(t, i))
+		indexed[i] = indexedTask{task: t, index: i}
+	}
+	sort.SliceStable(indexed, func(i, j int) bool {
+		ti, tj := indexed[i].task.Ticket, indexed[j].task.Ticket
+		if ti == tj {
+			return false
+		}
+		if ti == "" {
+			return false
+		}
+		if tj == "" {
+			return true
+		}
+		return ti < tj
+	})
+
+	options := make([]menuItem, 0, len(indexed))
+	for _, it := range indexed {
+		options = append(options, taskMenuItem(it.task, it.index))
 	}
 	picked, action, err := runDetailedMenu("Pick a task", options, true, true)
 	if err != nil {
@@ -735,6 +761,7 @@ func (a *App) runTaskSelector() error {
 		if err != nil {
 			return err
 		}
+		cfg.Tasks[idx].Ticket = updated.Ticket
 		cfg.Tasks[idx].Description = updated.Description
 		cfg.Tasks[idx].Branch = updated.Branch
 		cfg.Tasks[idx].Path = updated.Path
@@ -754,6 +781,24 @@ func (a *App) runTaskSelector() error {
 		}
 		return writeToml(a.TasksToml, cfg)
 	}
+	if action == "tmux" {
+		ticket := cfg.Tasks[idx].Ticket
+		if ticket == "" {
+			return errors.New("selected task has no ticket number")
+		}
+		if os.Getenv("TMUX") == "" {
+			return errors.New("not running inside a tmux session")
+		}
+		// Collect paths for all tasks sharing the same ticket.
+		paths := make([]string, 0, len(cfg.Tasks))
+		paths = append(paths, cfg.Tasks[idx].Path)
+		for i, t := range cfg.Tasks {
+			if i != idx && t.Ticket == ticket {
+				paths = append(paths, t.Path)
+			}
+		}
+		return tmuxOpenWindow(ticket, paths)
+	}
 
 	return launchShell(cfg.Tasks[idx].Path)
 }
@@ -763,11 +808,18 @@ func (a *App) addCurrentTask() error {
 	if err != nil {
 		return err
 	}
+	defaultTicket := inferTicketFromBranch(baseTask.Branch)
+	ticket, err := promptOptionalInput("Ticket number (optional)", defaultTicket)
+	if err != nil {
+		return err
+	}
+	ticket = strings.TrimSpace(ticket)
 	description, err := promptTaskDesc("")
 	if err != nil {
 		return err
 	}
 	t := Task{
+		Ticket:      ticket,
 		Branch:      baseTask.Branch,
 		Path:        baseTask.Path,
 		Repo:        baseTask.Repo,
@@ -779,6 +831,23 @@ func (a *App) addCurrentTask() error {
 	}
 	fmt.Printf("Added task: %s\n", taskDisplayName(t))
 	return nil
+}
+
+func inferTicketFromBranch(branch string) string {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return ""
+	}
+	idx := strings.Index(branch, "-")
+	if idx <= 0 {
+		return ""
+	}
+	prefix := branch[:idx]
+	// Only treat as ticket if the prefix looks like a ticket (alphanumeric, no slashes)
+	if strings.ContainsAny(prefix, "/\\") {
+		return ""
+	}
+	return prefix
 }
 
 func (a *App) renameCurrentTask(nameArg string) error {
@@ -864,6 +933,9 @@ func taskDisplayName(t Task) string {
 
 func taskMenuItem(t Task, index int) menuItem {
 	title := taskDisplayName(t)
+	if t.Ticket != "" {
+		title = fmt.Sprintf("[#%s] %s", t.Ticket, title)
+	}
 	description := strings.TrimSpace(t.Description)
 	if description == "" {
 		description = fmt.Sprintf("repo: %s | path: %s", t.Repo, t.Path)
@@ -876,6 +948,26 @@ func taskMenuItem(t Task, index int) menuItem {
 	}
 }
 
+func tmuxOpenWindow(ticket string, paths []string) error {
+	if len(paths) == 0 {
+		return errors.New("no paths provided for tmux window")
+	}
+	windowName := "#" + ticket
+	// Create the new window with the first path as the start directory.
+	out, err := exec.Command("tmux", "new-window", "-P", "-F", "#{window_id}", "-n", windowName, "-c", paths[0]).Output()
+	if err != nil {
+		return fmt.Errorf("tmux new-window failed: %w", err)
+	}
+	windowID := strings.TrimSpace(string(out))
+	// Open additional panes for remaining paths.
+	for _, p := range paths[1:] {
+		if err := runCmd("", "tmux", "split-window", "-t", windowID, "-c", p); err != nil {
+			return fmt.Errorf("tmux split-window failed: %w", err)
+		}
+	}
+	return nil
+}
+
 func promptTaskDescription(existing string) (string, error) {
 	description, err := promptOptionalInput("Task description (optional)", existing)
 	if err != nil {
@@ -886,6 +978,7 @@ func promptTaskDescription(existing string) (string, error) {
 
 func promptTaskEditor(current Task) (Task, error) {
 	updated := Task{
+		Ticket:      current.Ticket,
 		Description: current.Description,
 		Branch:      current.Branch,
 		Path:        current.Path,
@@ -893,6 +986,10 @@ func promptTaskEditor(current Task) (Task, error) {
 	}
 	form := huh.NewForm(
 		huh.NewGroup(
+			huh.NewInput().
+				Title("Ticket (optional)").
+				Placeholder("123").
+				Value(&updated.Ticket),
 			huh.NewText().
 				Title("Description (optional)").
 				Placeholder("Describe this task").
@@ -914,6 +1011,7 @@ func promptTaskEditor(current Task) (Task, error) {
 	if err := form.Run(); err != nil {
 		return Task{}, err
 	}
+	updated.Ticket = strings.TrimSpace(updated.Ticket)
 	updated.Description = strings.TrimSpace(updated.Description)
 	updated.Branch = strings.TrimSpace(updated.Branch)
 	updated.Path = strings.TrimSpace(updated.Path)

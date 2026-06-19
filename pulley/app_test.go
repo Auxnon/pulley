@@ -613,6 +613,106 @@ func TestRenameCurrentTaskErrorsWhenCurrentDirNotListed(t *testing.T) {
 	}
 }
 
+func TestInferTicketFromBranch(t *testing.T) {
+	cases := []struct {
+		branch string
+		want   string
+	}{
+		{"123-add-search", "123"},
+		{"PROJ-456-fix-bug", "PROJ"},
+		{"feature/no-ticket", ""},
+		{"main", ""},
+		{"", ""},
+		{"123", ""},
+		{"-leading-dash", ""},
+	}
+	for _, c := range cases {
+		got := inferTicketFromBranch(c.branch)
+		if got != c.want {
+			t.Errorf("inferTicketFromBranch(%q) = %q, want %q", c.branch, got, c.want)
+		}
+	}
+}
+
+func TestTaskMenuItemWithTicketPrefixesTitle(t *testing.T) {
+	item := taskMenuItem(Task{
+		Ticket: "123",
+		Branch: "123-add-search",
+		Repo:   "backend",
+		Path:   "/work/backend",
+	}, 1)
+
+	if item.Title() != "[#123] 123-add-search -> /work/backend" {
+		t.Fatalf("unexpected title: %s", item.Title())
+	}
+	if item.FilterValue() != "[#123] 123-add-search -> /work/backend" {
+		t.Fatalf("unexpected filter value: %s", item.FilterValue())
+	}
+}
+
+func TestTaskMenuItemWithoutTicketHasNoPrefix(t *testing.T) {
+	item := taskMenuItem(Task{
+		Branch: "feat/a",
+		Repo:   "backend",
+		Path:   "/work/backend",
+	}, 0)
+
+	if item.Title() != "feat/a -> /work/backend" {
+		t.Fatalf("unexpected title (no prefix expected): %s", item.Title())
+	}
+}
+
+func TestTasksTomlRoundtripsTicket(t *testing.T) {
+	root := t.TempDir()
+	app := &App{TasksToml: filepath.Join(root, "tasks.toml")}
+
+	if err := app.addTask(Task{
+		Ticket: "42",
+		Branch: "42-fix",
+		Path:   "/tmp/repo",
+		Repo:   "backend",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := app.loadTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tasks) != 1 {
+		t.Fatalf("expected one task, got %d", len(cfg.Tasks))
+	}
+	if cfg.Tasks[0].Ticket != "42" {
+		t.Fatalf("expected ticket 42, got %q", cfg.Tasks[0].Ticket)
+	}
+}
+
+func TestWriteTomlOmitsEmptyTicket(t *testing.T) {
+	root := t.TempDir()
+	tasksPath := filepath.Join(root, "tasks.toml")
+	cfg := taskConfig{
+		Tasks: []Task{
+			{Ticket: "", Branch: "feat/a", Path: "/tmp/repo", Repo: "repo"},
+		},
+	}
+	if err := writeToml(tasksPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(tasksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "ticket =") {
+		t.Fatalf("expected empty ticket to be omitted from tasks.toml, got:\n%s", string(raw))
+	}
+}
+
+func TestTmuxOpenWindowRequiresPaths(t *testing.T) {
+	if err := tmuxOpenWindow("123", nil); err == nil {
+		t.Fatal("expected error for empty paths")
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	origStdout := os.Stdout
