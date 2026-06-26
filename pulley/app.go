@@ -193,8 +193,12 @@ func (a *App) pullRepos(repos []string) error {
 	}
 
 	paths := make([]string, 0, len(repos))
+	if len(repos) > 0 {
+		for _, repo := range repos {
+			fmt.Printf("Pulling repo: %s\n", repo)
+		}
+	}
 	for _, repo := range repos {
-		fmt.Printf("Pulling repo: %s\n", repo)
 		destPath, err := a.pullRepoForTicket(source, ticket, repo)
 		if err != nil {
 			return err
