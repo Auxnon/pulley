@@ -152,23 +152,12 @@ func (a *App) Run(args []string) error {
 		return err
 	}
 
-	repo := ""
-	if len(args) > 0 {
-		selected, err := a.selectRepoFromAssetsQuery(args[0])
-		if err != nil {
-			return fmt.Errorf("failed to resolve repository query: %w", err)
-		}
-		repo = selected
-	} else {
-		selected, err := a.selectRepoFromAssetsOrNew()
-		if err != nil {
-			return err
-		}
-		repo = selected
+	repos, err := a.resolveRepos(args)
+	if err != nil {
+		return err
 	}
-	fmt.Printf("Pulling repo: %s\n", repo)
 
-	return a.pullRepo(repo)
+	return a.pullRepos(repos)
 }
 
 func (a *App) saveSource(source string) error {
@@ -183,7 +172,14 @@ func (a *App) saveSource(source string) error {
 	return nil
 }
 
-func (a *App) pullRepo(repo string) error {
+// pullRepos clones one or more repos under a single shared ticket. A single
+// repo drops you into a shell as before; multiple repos open together in a
+// tmux window (the same view the "o" key produces on the task list), so the
+// command can fan out across several repos for the same ticket.
+func (a *App) pullRepos(repos []string) error {
+	if len(repos) == 0 {
+		return errors.New("no repositories to pull")
+	}
 	source, err := a.loadSource()
 	if err != nil {
 		source, err = a.promptAndSaveSource()
@@ -191,58 +187,84 @@ func (a *App) pullRepo(repo string) error {
 			return err
 		}
 	}
-	cloneURL := buildCloneURL(source, repo)
 	ticket, err := promptTicketNumber()
 	if err != nil {
 		return err
 	}
+
+	paths := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		fmt.Printf("Pulling repo: %s\n", repo)
+		destPath, err := a.pullRepoForTicket(source, ticket, repo)
+		if err != nil {
+			return err
+		}
+		paths = append(paths, destPath)
+	}
+
+	if len(paths) == 1 {
+		return launchShell(paths[0])
+	}
+
+	fmt.Printf("Created %d repos for ticket #%s\n", len(paths), ticket)
+	if os.Getenv("TMUX") == "" {
+		return fmt.Errorf("not running inside a tmux session; cannot open a window for %d repos:\n  %s", len(paths), strings.Join(paths, "\n  "))
+	}
+	return tmuxOpenWindow(ticket, paths)
+}
+
+// pullRepoForTicket clones a single repo for an already-chosen ticket, copies
+// its asset template, creates/switches to the work branch, and records the
+// task. It returns the destination path so callers can fan out across repos.
+func (a *App) pullRepoForTicket(source, ticket, repo string) (string, error) {
+	cloneURL := buildCloneURL(source, repo)
 	destName, err := promptDestinationName(a.PullRoot, ticket, repo)
 	if err != nil {
-		return err
+		return "", err
 	}
 	destPath := filepath.Join(a.PullRoot, destName)
 
 	if err := runCmd("", "git", "clone", cloneURL, destPath); err != nil {
-		return err
+		return "", err
 	}
 
 	assetTemplate := filepath.Join(a.AssetsDir, repo)
 	if st, err := os.Stat(assetTemplate); err == nil && st.IsDir() {
 		if err := copyTree(assetTemplate, destPath); err != nil {
-			return err
+			return "", err
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(assetTemplate, 0o755); err != nil {
-			return err
+			return "", err
 		}
 	}
 
 	branches, err := gitBranches(destPath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	baseBranch, err := pickFromList("Select base branch", branches, false)
 	if err != nil {
-		return err
+		return "", err
 	}
 	newBranch, createNewBranch, err := promptBranchName(ticket, baseBranch)
 	if err != nil {
-		return err
+		return "", err
 	}
 	fmt.Printf("%s -> %s\n", baseBranch, newBranch)
 	if createNewBranch {
 		if err := runCmd(destPath, "git", "switch", "-c", newBranch, baseBranch); err != nil {
-			return err
+			return "", err
 		}
 	} else {
 		if err := switchToExistingBranch(destPath, newBranch); err != nil {
-			return err
+			return "", err
 		}
 	}
 
 	description, err := promptTaskDesc("")
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := a.addTask(Task{
 		Ticket:      ticket,
@@ -252,11 +274,11 @@ func (a *App) pullRepo(repo string) error {
 		Description: description,
 		CreatedAt:   time.Now().UTC(),
 	}); err != nil {
-		return err
+		return "", err
 	}
 
 	fmt.Printf("Created %s and branch %s\n", destPath, newBranch)
-	return launchShell(destPath)
+	return destPath, nil
 }
 
 func (a *App) loadSource() (string, error) {
@@ -438,26 +460,67 @@ func nextAvailableName(root, base string) string {
 	}
 }
 
-func (a *App) selectRepoFromAssetsOrNew() (string, error) {
+// resolveRepos turns command arguments into the list of repos to pull. Each
+// argument is its own fuzzy query, so `pulley ec-backend ec-frontend` resolves
+// two repos in one go. With no arguments it falls back to an interactive
+// prompt that also accepts several space-separated fuzzy terms.
+func (a *App) resolveRepos(args []string) ([]string, error) {
+	if len(args) > 0 {
+		repos := make([]string, 0, len(args))
+		seen := map[string]struct{}{}
+		for _, arg := range args {
+			repo, err := a.selectRepoFromAssetsQuery(arg)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve repository query %q: %w", arg, err)
+			}
+			if _, ok := seen[repo]; ok {
+				continue
+			}
+			seen[repo] = struct{}{}
+			repos = append(repos, repo)
+		}
+		return repos, nil
+	}
+	return a.selectReposInteractive()
+}
+
+func (a *App) selectReposInteractive() ([]string, error) {
 	projects, err := listAssetProjects(a.AssetsDir)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	query, err := promptInput("Find repo (fuzzy, blank to browse)", "")
+	query, err := promptInput("Find repos (fuzzy; space-separate for multiple, blank to browse)", "")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	query = strings.TrimSpace(query)
 
 	if query == "" {
 		if len(projects) == 0 {
-			return "", errors.New("no project folders found in assets")
+			return nil, errors.New("no project folders found in assets")
 		}
-		return pickFromList("Pick project", projects, false)
+		repo, err := pickFromList("Pick project", projects, false)
+		if err != nil {
+			return nil, err
+		}
+		return []string{repo}, nil
 	}
 
-	return resolveRepoQuery(query, projects)
+	repos := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, term := range strings.Fields(query) {
+		repo, err := resolveRepoQuery(term, projects)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[repo]; ok {
+			continue
+		}
+		seen[repo] = struct{}{}
+		repos = append(repos, repo)
+	}
+	return repos, nil
 }
 
 func (a *App) selectRepoFromAssetsQuery(query string) (string, error) {

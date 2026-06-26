@@ -320,6 +320,49 @@ func TestSelectRepoFromAssetsQueryUsesFuzzyMatch(t *testing.T) {
 	}
 }
 
+func TestResolveReposResolvesMultipleArgsAndDedupes(t *testing.T) {
+	root := t.TempDir()
+	assets := filepath.Join(root, "assets")
+	for _, name := range []string{"ec-backend", "ec-frontend", "platform-api"} {
+		if err := os.MkdirAll(filepath.Join(assets, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app := &App{AssetsDir: assets}
+	repos, err := app.resolveRepos([]string{"ecb", "ecf", "ecb"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	want := []string{"ec-backend", "ec-frontend"}
+	if len(repos) != len(want) {
+		t.Fatalf("expected %v, got %v", want, repos)
+	}
+	for i, r := range want {
+		if repos[i] != r {
+			t.Fatalf("expected %v, got %v", want, repos)
+		}
+	}
+}
+
+func TestResolveReposReportsUnresolvableArg(t *testing.T) {
+	root := t.TempDir()
+	assets := filepath.Join(root, "assets")
+	if err := os.MkdirAll(filepath.Join(assets, "ec-backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{AssetsDir: assets}
+	// "nope" matches nothing; resolveRepoQuery falls back to an interactive
+	// confirm that fails on a non-TTY, so resolveRepos should surface an error
+	// naming the offending query rather than silently succeeding.
+	if _, err := app.resolveRepos([]string{"nope"}); err == nil {
+		t.Fatal("expected error for unresolvable query")
+	} else if !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("expected error to name the query, got %v", err)
+	}
+}
+
 func TestTaskDisplayNameShortensHomePath(t *testing.T) {
 	origHome := userHomeDir
 	t.Cleanup(func() { userHomeDir = origHome })
