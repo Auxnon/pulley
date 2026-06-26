@@ -320,6 +320,49 @@ func TestSelectRepoFromAssetsQueryUsesFuzzyMatch(t *testing.T) {
 	}
 }
 
+func TestResolveReposResolvesMultipleArgsAndDedupes(t *testing.T) {
+	root := t.TempDir()
+	assets := filepath.Join(root, "assets")
+	for _, name := range []string{"ec-backend", "ec-frontend", "platform-api"} {
+		if err := os.MkdirAll(filepath.Join(assets, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app := &App{AssetsDir: assets}
+	repos, err := app.resolveRepos([]string{"ecb", "ecf", "ecb"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	want := []string{"ec-backend", "ec-frontend"}
+	if len(repos) != len(want) {
+		t.Fatalf("expected %v, got %v", want, repos)
+	}
+	for i, r := range want {
+		if repos[i] != r {
+			t.Fatalf("expected %v, got %v", want, repos)
+		}
+	}
+}
+
+func TestResolveReposReportsUnresolvableArg(t *testing.T) {
+	root := t.TempDir()
+	assets := filepath.Join(root, "assets")
+	if err := os.MkdirAll(filepath.Join(assets, "ec-backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{AssetsDir: assets}
+	// "nope" matches nothing; resolveRepoQuery falls back to an interactive
+	// confirm that fails on a non-TTY, so resolveRepos should surface an error
+	// naming the offending query rather than silently succeeding.
+	if _, err := app.resolveRepos([]string{"nope"}); err == nil {
+		t.Fatal("expected error for unresolvable query")
+	} else if !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("expected error to name the query, got %v", err)
+	}
+}
+
 func TestTaskDisplayNameShortensHomePath(t *testing.T) {
 	origHome := userHomeDir
 	t.Cleanup(func() { userHomeDir = origHome })
@@ -610,6 +653,107 @@ func TestRenameCurrentTaskErrorsWhenCurrentDirNotListed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not listed") {
 		t.Fatalf("expected not listed error, got %v", err)
+	}
+}
+
+func TestInferTicketFromBranch(t *testing.T) {
+	cases := []struct {
+		branch string
+		want   string
+	}{
+		{"123-add-search", "123"},
+		{"PROJ-fix-bug", "PROJ"},
+		{"feature/no-ticket", ""},
+		{"main", ""},
+		{"", ""},
+		{"123", ""},
+		{"-leading-dash", ""},
+		{"has space-name", ""},
+	}
+	for _, c := range cases {
+		got := inferTicketFromBranch(c.branch)
+		if got != c.want {
+			t.Errorf("inferTicketFromBranch(%q) = %q, want %q", c.branch, got, c.want)
+		}
+	}
+}
+
+func TestTaskMenuItemWithTicketPrefixesTitle(t *testing.T) {
+	item := taskMenuItem(Task{
+		Ticket: "123",
+		Branch: "123-add-search",
+		Repo:   "backend",
+		Path:   "/work/backend",
+	}, 1)
+
+	if item.Title() != "[#123] 123-add-search -> /work/backend" {
+		t.Fatalf("unexpected title: %s", item.Title())
+	}
+	if item.FilterValue() != "[#123] 123-add-search -> /work/backend" {
+		t.Fatalf("unexpected filter value: %s", item.FilterValue())
+	}
+}
+
+func TestTaskMenuItemWithoutTicketHasNoPrefix(t *testing.T) {
+	item := taskMenuItem(Task{
+		Branch: "feat/a",
+		Repo:   "backend",
+		Path:   "/work/backend",
+	}, 0)
+
+	if item.Title() != "feat/a -> /work/backend" {
+		t.Fatalf("unexpected title (no prefix expected): %s", item.Title())
+	}
+}
+
+func TestTasksTomlRoundtripsTicket(t *testing.T) {
+	root := t.TempDir()
+	app := &App{TasksToml: filepath.Join(root, "tasks.toml")}
+
+	if err := app.addTask(Task{
+		Ticket: "42",
+		Branch: "42-fix",
+		Path:   "/tmp/repo",
+		Repo:   "backend",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := app.loadTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tasks) != 1 {
+		t.Fatalf("expected one task, got %d", len(cfg.Tasks))
+	}
+	if cfg.Tasks[0].Ticket != "42" {
+		t.Fatalf("expected ticket 42, got %q", cfg.Tasks[0].Ticket)
+	}
+}
+
+func TestWriteTomlOmitsEmptyTicket(t *testing.T) {
+	root := t.TempDir()
+	tasksPath := filepath.Join(root, "tasks.toml")
+	cfg := taskConfig{
+		Tasks: []Task{
+			{Ticket: "", Branch: "feat/a", Path: "/tmp/repo", Repo: "repo"},
+		},
+	}
+	if err := writeToml(tasksPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(tasksPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "ticket =") {
+		t.Fatalf("expected empty ticket to be omitted from tasks.toml, got:\n%s", string(raw))
+	}
+}
+
+func TestTmuxOpenWindowRequiresPaths(t *testing.T) {
+	if err := tmuxOpenWindow("123", nil); err == nil {
+		t.Fatal("expected error for empty paths")
 	}
 }
 

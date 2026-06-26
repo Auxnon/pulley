@@ -94,6 +94,7 @@ type taskConfig struct {
 }
 
 type Task struct {
+	Ticket      string    `toml:"ticket,omitempty"`
 	Branch      string    `toml:"branch"`
 	Path        string    `toml:"path"`
 	Repo        string    `toml:"repo"`
@@ -151,23 +152,12 @@ func (a *App) Run(args []string) error {
 		return err
 	}
 
-	repo := ""
-	if len(args) > 0 {
-		selected, err := a.selectRepoFromAssetsQuery(args[0])
-		if err != nil {
-			return fmt.Errorf("failed to resolve repository query: %w", err)
-		}
-		repo = selected
-	} else {
-		selected, err := a.selectRepoFromAssetsOrNew()
-		if err != nil {
-			return err
-		}
-		repo = selected
+	repos, err := a.resolveRepos(args)
+	if err != nil {
+		return err
 	}
-	fmt.Printf("Pulling repo: %s\n", repo)
 
-	return a.pullRepo(repo)
+	return a.pullRepos(repos)
 }
 
 func (a *App) saveSource(source string) error {
@@ -182,7 +172,14 @@ func (a *App) saveSource(source string) error {
 	return nil
 }
 
-func (a *App) pullRepo(repo string) error {
+// pullRepos clones one or more repos under a single shared ticket. A single
+// repo drops you into a shell as before; multiple repos open together in a
+// tmux window (the same view the "o" key produces on the task list), so the
+// command can fan out across several repos for the same ticket.
+func (a *App) pullRepos(repos []string) error {
+	if len(repos) == 0 {
+		return errors.New("no repositories to pull")
+	}
 	source, err := a.loadSource()
 	if err != nil {
 		source, err = a.promptAndSaveSource()
@@ -190,71 +187,102 @@ func (a *App) pullRepo(repo string) error {
 			return err
 		}
 	}
-	cloneURL := buildCloneURL(source, repo)
 	ticket, err := promptTicketNumber()
 	if err != nil {
 		return err
 	}
+
+	paths := make([]string, 0, len(repos))
+	if len(repos) > 0 {
+		for _, repo := range repos {
+			fmt.Printf("Pulling repo: %s\n", repo)
+		}
+	}
+	for _, repo := range repos {
+		destPath, err := a.pullRepoForTicket(source, ticket, repo)
+		if err != nil {
+			return err
+		}
+		paths = append(paths, destPath)
+	}
+
+	if len(paths) == 1 {
+		return launchShell(paths[0])
+	}
+
+	fmt.Printf("Created %d repos for ticket #%s\n", len(paths), ticket)
+	if os.Getenv("TMUX") == "" {
+		return fmt.Errorf("not running inside a tmux session; cannot open a window for %d repos:\n  %s", len(paths), strings.Join(paths, "\n  "))
+	}
+	return tmuxOpenWindow(ticket, paths)
+}
+
+// pullRepoForTicket clones a single repo for an already-chosen ticket, copies
+// its asset template, creates/switches to the work branch, and records the
+// task. It returns the destination path so callers can fan out across repos.
+func (a *App) pullRepoForTicket(source, ticket, repo string) (string, error) {
+	cloneURL := buildCloneURL(source, repo)
 	destName, err := promptDestinationName(a.PullRoot, ticket, repo)
 	if err != nil {
-		return err
+		return "", err
 	}
 	destPath := filepath.Join(a.PullRoot, destName)
 
 	if err := runCmd("", "git", "clone", cloneURL, destPath); err != nil {
-		return err
+		return "", err
 	}
 
 	assetTemplate := filepath.Join(a.AssetsDir, repo)
 	if st, err := os.Stat(assetTemplate); err == nil && st.IsDir() {
 		if err := copyTree(assetTemplate, destPath); err != nil {
-			return err
+			return "", err
 		}
 	} else if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(assetTemplate, 0o755); err != nil {
-			return err
+			return "", err
 		}
 	}
 
 	branches, err := gitBranches(destPath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	baseBranch, err := pickFromList("Select base branch", branches, false)
 	if err != nil {
-		return err
+		return "", err
 	}
 	newBranch, createNewBranch, err := promptBranchName(ticket, baseBranch)
 	if err != nil {
-		return err
+		return "", err
 	}
 	fmt.Printf("%s -> %s\n", baseBranch, newBranch)
 	if createNewBranch {
 		if err := runCmd(destPath, "git", "switch", "-c", newBranch, baseBranch); err != nil {
-			return err
+			return "", err
 		}
 	} else {
 		if err := switchToExistingBranch(destPath, newBranch); err != nil {
-			return err
+			return "", err
 		}
 	}
 
 	description, err := promptTaskDesc("")
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := a.addTask(Task{
+		Ticket:      ticket,
 		Branch:      newBranch,
 		Path:        destPath,
 		Repo:        repo,
 		Description: description,
 		CreatedAt:   time.Now().UTC(),
 	}); err != nil {
-		return err
+		return "", err
 	}
 
 	fmt.Printf("Created %s and branch %s\n", destPath, newBranch)
-	return launchShell(destPath)
+	return destPath, nil
 }
 
 func (a *App) loadSource() (string, error) {
@@ -436,26 +464,67 @@ func nextAvailableName(root, base string) string {
 	}
 }
 
-func (a *App) selectRepoFromAssetsOrNew() (string, error) {
+// resolveRepos turns command arguments into the list of repos to pull. Each
+// argument is its own fuzzy query, so `pulley ec-backend ec-frontend` resolves
+// two repos in one go. With no arguments it falls back to an interactive
+// prompt that also accepts several space-separated fuzzy terms.
+func (a *App) resolveRepos(args []string) ([]string, error) {
+	if len(args) > 0 {
+		repos := make([]string, 0, len(args))
+		seen := map[string]struct{}{}
+		for _, arg := range args {
+			repo, err := a.selectRepoFromAssetsQuery(arg)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve repository query %q: %w", arg, err)
+			}
+			if _, ok := seen[repo]; ok {
+				continue
+			}
+			seen[repo] = struct{}{}
+			repos = append(repos, repo)
+		}
+		return repos, nil
+	}
+	return a.selectReposInteractive()
+}
+
+func (a *App) selectReposInteractive() ([]string, error) {
 	projects, err := listAssetProjects(a.AssetsDir)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	query, err := promptInput("Find repo (fuzzy, blank to browse)", "")
+	query, err := promptInput("Find repos (fuzzy; space-separate for multiple, blank to browse)", "")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	query = strings.TrimSpace(query)
 
 	if query == "" {
 		if len(projects) == 0 {
-			return "", errors.New("no project folders found in assets")
+			return nil, errors.New("no project folders found in assets")
 		}
-		return pickFromList("Pick project", projects, false)
+		repo, err := pickFromList("Pick project", projects, false)
+		if err != nil {
+			return nil, err
+		}
+		return []string{repo}, nil
 	}
 
-	return resolveRepoQuery(query, projects)
+	repos := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, term := range strings.Fields(query) {
+		repo, err := resolveRepoQuery(term, projects)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[repo]; ok {
+			continue
+		}
+		seen[repo] = struct{}{}
+		repos = append(repos, repo)
+	}
+	return repos, nil
 }
 
 func (a *App) selectRepoFromAssetsQuery(query string) (string, error) {
@@ -703,9 +772,33 @@ func (a *App) runTaskSelector() error {
 	if len(cfg.Tasks) == 0 {
 		return errors.New("no tasks yet")
 	}
-	options := make([]menuItem, 0, len(cfg.Tasks))
+
+	// Sort tasks by ticket (empty ticket last), preserving original order within same ticket.
+	type indexedTask struct {
+		task  Task
+		index int
+	}
+	indexed := make([]indexedTask, len(cfg.Tasks))
 	for i, t := range cfg.Tasks {
-		options = append(options, taskMenuItem(t, i))
+		indexed[i] = indexedTask{task: t, index: i}
+	}
+	sort.SliceStable(indexed, func(i, j int) bool {
+		ti, tj := indexed[i].task.Ticket, indexed[j].task.Ticket
+		if ti == tj {
+			return false
+		}
+		if ti == "" {
+			return false
+		}
+		if tj == "" {
+			return true
+		}
+		return ti < tj
+	})
+
+	options := make([]menuItem, 0, len(indexed))
+	for _, it := range indexed {
+		options = append(options, taskMenuItem(it.task, it.index))
 	}
 	picked, action, err := runDetailedMenu("Pick a task", options, true, true)
 	if err != nil {
@@ -735,6 +828,7 @@ func (a *App) runTaskSelector() error {
 		if err != nil {
 			return err
 		}
+		cfg.Tasks[idx].Ticket = updated.Ticket
 		cfg.Tasks[idx].Description = updated.Description
 		cfg.Tasks[idx].Branch = updated.Branch
 		cfg.Tasks[idx].Path = updated.Path
@@ -754,6 +848,23 @@ func (a *App) runTaskSelector() error {
 		}
 		return writeToml(a.TasksToml, cfg)
 	}
+	if action == "tmux" {
+		ticket := cfg.Tasks[idx].Ticket
+		if ticket == "" {
+			return errors.New("selected task has no ticket number")
+		}
+		if os.Getenv("TMUX") == "" {
+			return errors.New("not running inside a tmux session")
+		}
+		// Collect paths for all tasks sharing the same ticket.
+		paths := []string{cfg.Tasks[idx].Path}
+		for i, t := range cfg.Tasks {
+			if i != idx && t.Ticket == ticket {
+				paths = append(paths, t.Path)
+			}
+		}
+		return tmuxOpenWindow(ticket, paths)
+	}
 
 	return launchShell(cfg.Tasks[idx].Path)
 }
@@ -763,11 +874,18 @@ func (a *App) addCurrentTask() error {
 	if err != nil {
 		return err
 	}
+	defaultTicket := inferTicketFromBranch(baseTask.Branch)
+	ticket, err := promptOptionalInput("Ticket number (optional)", defaultTicket)
+	if err != nil {
+		return err
+	}
+	ticket = strings.TrimSpace(ticket)
 	description, err := promptTaskDesc("")
 	if err != nil {
 		return err
 	}
 	t := Task{
+		Ticket:      ticket,
 		Branch:      baseTask.Branch,
 		Path:        baseTask.Path,
 		Repo:        baseTask.Repo,
@@ -779,6 +897,25 @@ func (a *App) addCurrentTask() error {
 	}
 	fmt.Printf("Added task: %s\n", taskDisplayName(t))
 	return nil
+}
+
+func inferTicketFromBranch(branch string) string {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return ""
+	}
+	idx := strings.Index(branch, "-")
+	if idx <= 0 {
+		return ""
+	}
+	prefix := branch[:idx]
+	// Only treat as ticket if the prefix is purely alphanumeric (no slashes or special chars).
+	for _, r := range prefix {
+		if !('a' <= r && r <= 'z') && !('A' <= r && r <= 'Z') && !('0' <= r && r <= '9') {
+			return ""
+		}
+	}
+	return prefix
 }
 
 func (a *App) renameCurrentTask(nameArg string) error {
@@ -864,6 +1001,9 @@ func taskDisplayName(t Task) string {
 
 func taskMenuItem(t Task, index int) menuItem {
 	title := taskDisplayName(t)
+	if t.Ticket != "" {
+		title = fmt.Sprintf("[#%s] %s", t.Ticket, title)
+	}
 	description := strings.TrimSpace(t.Description)
 	if description == "" {
 		description = fmt.Sprintf("repo: %s | path: %s", t.Repo, t.Path)
@@ -876,6 +1016,26 @@ func taskMenuItem(t Task, index int) menuItem {
 	}
 }
 
+func tmuxOpenWindow(ticket string, paths []string) error {
+	if len(paths) == 0 {
+		return errors.New("no paths provided for tmux window")
+	}
+	windowName := "#" + ticket
+	// Create the new window with the first path as the start directory.
+	out, err := exec.Command("tmux", "new-window", "-P", "-F", "#{window_id}", "-n", windowName, "-c", paths[0]).Output()
+	if err != nil {
+		return fmt.Errorf("tmux new-window failed: %w", err)
+	}
+	windowID := strings.TrimSpace(string(out))
+	// Open additional panes for remaining paths.
+	for _, p := range paths[1:] {
+		if err := runCmd("", "tmux", "split-window", "-t", windowID, "-c", p); err != nil {
+			return fmt.Errorf("tmux split-window failed: %w", err)
+		}
+	}
+	return nil
+}
+
 func promptTaskDescription(existing string) (string, error) {
 	description, err := promptOptionalInput("Task description (optional)", existing)
 	if err != nil {
@@ -886,6 +1046,7 @@ func promptTaskDescription(existing string) (string, error) {
 
 func promptTaskEditor(current Task) (Task, error) {
 	updated := Task{
+		Ticket:      current.Ticket,
 		Description: current.Description,
 		Branch:      current.Branch,
 		Path:        current.Path,
@@ -893,6 +1054,10 @@ func promptTaskEditor(current Task) (Task, error) {
 	}
 	form := huh.NewForm(
 		huh.NewGroup(
+			huh.NewInput().
+				Title("Ticket (optional)").
+				Placeholder("123").
+				Value(&updated.Ticket),
 			huh.NewText().
 				Title("Description (optional)").
 				Placeholder("Describe this task").
@@ -914,6 +1079,7 @@ func promptTaskEditor(current Task) (Task, error) {
 	if err := form.Run(); err != nil {
 		return Task{}, err
 	}
+	updated.Ticket = strings.TrimSpace(updated.Ticket)
 	updated.Description = strings.TrimSpace(updated.Description)
 	updated.Branch = strings.TrimSpace(updated.Branch)
 	updated.Path = strings.TrimSpace(updated.Path)

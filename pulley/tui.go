@@ -83,6 +83,12 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.action = "edit"
 				return m, tea.Quit
 			}
+		case "o":
+			if it, ok := m.list.SelectedItem().(menuItem); ok {
+				m.selection = it.selectionValue()
+				m.action = "tmux"
+				return m, tea.Quit
+			}
 		case "x":
 			if it, ok := m.list.SelectedItem().(menuItem); ok {
 				m.selection = it.selectionValue()
@@ -144,7 +150,7 @@ func runDetailedMenu(title string, options []menuItem, canDelete bool, canEdit b
 	l := list.New(items, newMenuDelegate(true), 0, 0)
 	l.Title = title
 	if canDelete && canEdit {
-		l.Title = title + " (x to delete, e to edit)"
+		l.Title = title + " (x to delete, e to edit, o for tmux)"
 	} else if canDelete {
 		l.Title = title + " (x to delete)"
 	} else if canEdit {

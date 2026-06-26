@@ -150,3 +150,20 @@ func TestMenuModelWindowSizeUsesTerminalSpan(t *testing.T) {
 		t.Fatalf("expected height 38, got %d", sized.list.Height())
 	}
 }
+
+func TestMenuModelOKeyOpensTmux(t *testing.T) {
+	items := []list.Item{
+		menuItem{title: "repo-a", value: "0"},
+	}
+	l := list.New(items, newMenuDelegate(false), 60, 14)
+	model := menuModel{list: l}
+
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	tmuxModel := updated.(menuModel)
+	if tmuxModel.action != "tmux" {
+		t.Fatalf("expected tmux action, got %q", tmuxModel.action)
+	}
+	if tmuxModel.selection != "0" {
+		t.Fatalf("expected selection 0, got %q", tmuxModel.selection)
+	}
+}
