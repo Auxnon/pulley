@@ -136,8 +136,65 @@ func TestBranchNameFromChoicePrefixesCustomBranchName(t *testing.T) {
 	if !createNew {
 		t.Fatal("expected a new branch to be created")
 	}
-	if got != "1234-add-search" {
-		t.Fatalf("expected ticket-prefixed branch name, got %s", got)
+	if got != "feature/1234-add-search" {
+		t.Fatalf("expected everon-convention branch name, got %s", got)
+	}
+}
+
+func TestEveronBranchNameAppliesConvention(t *testing.T) {
+	cases := []struct {
+		name   string
+		ticket string
+		choice string
+		want   string
+	}{
+		{"slugifies free text", "1234", "Add Search Bar", "feature/1234-add-search-bar"},
+		{"collapses punctuation", "1234", "add   search__bar!!", "feature/1234-add-search-bar"},
+		{"keeps existing prefix", "1234", "feature/1234-add-search", "feature/1234-add-search"},
+		{"keeps ticket typed once", "1234", "1234-add-search", "feature/1234-add-search"},
+		{"adds ticket to prefixed name", "1234", "feature/add-search", "feature/1234-add-search"},
+		{"preserves declared type", "1234", "fix/flaky login", "fix/1234-flaky-login"},
+		{"ticket kept verbatim", "ABC-9", "add search", "feature/ABC-9-add-search"},
+		{"ticket kept verbatim once", "ABC-9", "abc-9-add-search", "feature/ABC-9-add-search"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := everonBranchName(tc.ticket, tc.choice)
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("expected %s, got %s", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestEveronBranchNameRejectsEmptyInputs(t *testing.T) {
+	if _, err := everonBranchName("", "add-search"); err == nil {
+		t.Fatal("expected error for empty ticket")
+	}
+	if _, err := everonBranchName("1234", "///"); err == nil {
+		t.Fatal("expected error for empty branch name")
+	}
+	if _, err := everonBranchName("1234", "1234"); err == nil {
+		t.Fatal("expected error when only the ticket is supplied")
+	}
+}
+
+func TestSlugify(t *testing.T) {
+	cases := map[string]string{
+		"Add Search":      "add-search",
+		"  spaced  out  ": "spaced-out",
+		"CamelCase":       "camelcase",
+		"a/b":             "a-b",
+		"!!!":             "",
+		"v2.1 release":    "v2-1-release",
+	}
+	for in, want := range cases {
+		if got := slugify(in); got != want {
+			t.Fatalf("slugify(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -754,6 +811,181 @@ func TestWriteTomlOmitsEmptyTicket(t *testing.T) {
 func TestTmuxOpenWindowRequiresPaths(t *testing.T) {
 	if err := tmuxOpenWindow("123", nil); err == nil {
 		t.Fatal("expected error for empty paths")
+	}
+}
+
+func TestTmuxOpenGroupRequiresPaths(t *testing.T) {
+	if err := tmuxOpenGroup("123", nil); err == nil {
+		t.Fatal("expected error for empty paths")
+	}
+}
+
+func TestTmuxOpenGroupReportsPathsWhenTmuxMissing(t *testing.T) {
+	origLookPath := lookPath
+	lookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { lookPath = origLookPath })
+
+	err := tmuxOpenGroup("123", []string{"/work/a", "/work/b"})
+	if err == nil {
+		t.Fatal("expected error when tmux is unavailable")
+	}
+	if !strings.Contains(err.Error(), "/work/a") || !strings.Contains(err.Error(), "/work/b") {
+		t.Fatalf("expected the pulled paths in the error, got %v", err)
+	}
+}
+
+func TestTmuxSessionNameSanitizesTicket(t *testing.T) {
+	if got := tmuxSessionName("12.34"); got != "ticket-12-34" {
+		t.Fatalf("expected dots replaced, got %s", got)
+	}
+	if got := tmuxSessionName(""); got != "ticket-pulley" {
+		t.Fatalf("expected fallback name, got %s", got)
+	}
+}
+
+func TestResolveShellPrefersFish(t *testing.T) {
+	origLookPath := lookPath
+	lookPath = func(name string) (string, error) {
+		if name == "fish" {
+			return "/opt/homebrew/bin/fish", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { lookPath = origLookPath })
+	t.Setenv("PULLEY_SHELL", "")
+	t.Setenv("SHELL", "/bin/zsh")
+
+	if got := resolveShell(); got != "/opt/homebrew/bin/fish" {
+		t.Fatalf("expected fish to win over $SHELL, got %s", got)
+	}
+}
+
+func TestResolveShellFallsBackToShellEnv(t *testing.T) {
+	origLookPath := lookPath
+	lookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { lookPath = origLookPath })
+	t.Setenv("PULLEY_SHELL", "")
+	t.Setenv("SHELL", "/bin/zsh")
+
+	if got := resolveShell(); got != "/bin/zsh" {
+		t.Fatalf("expected $SHELL fallback, got %s", got)
+	}
+}
+
+func TestResolveShellHonorsOverride(t *testing.T) {
+	origLookPath := lookPath
+	lookPath = func(string) (string, error) { return "/opt/homebrew/bin/fish", nil }
+	t.Cleanup(func() { lookPath = origLookPath })
+	t.Setenv("PULLEY_SHELL", "/bin/bash")
+
+	if got := resolveShell(); got != "/bin/bash" {
+		t.Fatalf("expected PULLEY_SHELL override, got %s", got)
+	}
+}
+
+func TestPromptBatchInputAsksBranchAndDescriptionOnce(t *testing.T) {
+	origAsk, origDesc := askInput, promptTaskDesc
+	inputCalls, descCalls := 0, 0
+	askInput = func(string, string) (string, error) {
+		inputCalls++
+		return "Add Search Bar", nil
+	}
+	promptTaskDesc = func(string) (string, error) {
+		descCalls++
+		return "wire up search", nil
+	}
+	t.Cleanup(func() { askInput, promptTaskDesc = origAsk, origDesc })
+
+	var got batchInput
+	out := captureStdout(t, func() {
+		var err error
+		got, err = promptBatchInput("1234")
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	if inputCalls != 1 || descCalls != 1 {
+		t.Fatalf("expected one prompt each, got branch=%d description=%d", inputCalls, descCalls)
+	}
+	if !got.shared {
+		t.Fatal("expected batch input to be marked shared")
+	}
+	if got.ticket != "1234" || got.branchLabel != "Add Search Bar" || got.description != "wire up search" {
+		t.Fatalf("unexpected batch input: %+v", got)
+	}
+	if !strings.Contains(out, "feature/1234-add-search-bar") {
+		t.Fatalf("expected converted branch preview, got %q", out)
+	}
+}
+
+// A batch answers the branch question once, so every repo must land on the same
+// branch name regardless of the base branch it was cut from.
+func TestBatchInputProducesSameBranchAcrossRepos(t *testing.T) {
+	input := batchInput{ticket: "1234", branchLabel: "Add Search Bar", shared: true}
+	for _, baseBranch := range []string{"main", "dev", "release/2.1"} {
+		branch, createNew, err := branchNameFromChoice(input.ticket, baseBranch, input.branchLabel)
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if !createNew {
+			t.Fatalf("expected a new branch off %s", baseBranch)
+		}
+		if branch != "feature/1234-add-search-bar" {
+			t.Fatalf("expected identical branch off %s, got %s", baseBranch, branch)
+		}
+	}
+}
+
+// An empty batch branch label keeps the old "stay on the base branch" escape
+// hatch, which is resolved per repo.
+func TestBatchInputWithoutLabelUsesBaseBranch(t *testing.T) {
+	branch, createNew, err := branchNameFromChoice("1234", "dev", "")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if createNew {
+		t.Fatal("expected no new branch to be created")
+	}
+	if branch != "dev" {
+		t.Fatalf("expected base branch dev, got %s", branch)
+	}
+}
+
+func TestResolveDestinationNameAutoNamesBatch(t *testing.T) {
+	root := t.TempDir()
+	app := &App{PullRoot: root}
+
+	var got string
+	captureStdout(t, func() {
+		var err error
+		got, err = app.resolveDestinationName(batchInput{ticket: "1234", shared: true}, "ec-backend")
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+	if got != "1234-ec-backend" {
+		t.Fatalf("expected auto folder name, got %s", got)
+	}
+}
+
+func TestResolveDestinationNameBatchAvoidsCollisions(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "1234-ec-backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{PullRoot: root}
+
+	var got string
+	captureStdout(t, func() {
+		var err error
+		got, err = app.resolveDestinationName(batchInput{ticket: "1234", shared: true}, "ec-backend")
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+	if got != "1234-ec-backend2" {
+		t.Fatalf("expected suffixed folder name, got %s", got)
 	}
 }
 

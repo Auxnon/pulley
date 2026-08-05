@@ -150,7 +150,7 @@ func runDetailedMenu(title string, options []menuItem, canDelete bool, canEdit b
 	l := list.New(items, newMenuDelegate(true), 0, 0)
 	l.Title = title
 	if canDelete && canEdit {
-		l.Title = title + " (x to delete, e to edit, o for tmux)"
+		l.Title = title + " (x to delete, e to edit, o for tmux group)"
 	} else if canDelete {
 		l.Title = title + " (x to delete)"
 	} else if canEdit {

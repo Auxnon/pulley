@@ -21,6 +21,9 @@ import (
 const (
 	sourceFileName = "source.toml"
 	tasksFileName  = "tasks.toml"
+	// branchTypeDefault is the Everon convention prefix for work branches:
+	// feature/<ticket>-<slug>.
+	branchTypeDefault = "feature"
 )
 
 var (
@@ -30,6 +33,7 @@ var (
 	lookPath       = exec.LookPath
 	promptTaskDesc = promptTaskDescription
 	editTaskPrompt = promptTaskEditor
+	askInput       = promptInput
 )
 
 type App struct {
@@ -172,10 +176,20 @@ func (a *App) saveSource(source string) error {
 	return nil
 }
 
+// batchInput holds the answers every repo in a multi-repo pull shares: one
+// ticket, one branch label and one description. Folder names are derived
+// automatically in that case, so a batch asks each question exactly once.
+type batchInput struct {
+	ticket      string
+	branchLabel string
+	description string
+	shared      bool
+}
+
 // pullRepos clones one or more repos under a single shared ticket. A single
-// repo drops you into a shell as before; multiple repos open together in a
-// tmux window (the same view the "o" key produces on the task list), so the
-// command can fan out across several repos for the same ticket.
+// repo drops you into a shell as before; multiple repos are treated as one
+// batch (same ticket, same branch name, same description) and open together as
+// a tmux group, the same view the "o" key produces on the task list.
 func (a *App) pullRepos(repos []string) error {
 	if len(repos) == 0 {
 		return errors.New("no repositories to pull")
@@ -192,14 +206,24 @@ func (a *App) pullRepos(repos []string) error {
 		return err
 	}
 
-	paths := make([]string, 0, len(repos))
-	if len(repos) > 0 {
-		for _, repo := range repos {
-			fmt.Printf("Pulling repo: %s\n", repo)
+	for _, repo := range repos {
+		fmt.Printf("Pulling repo: %s\n", repo)
+	}
+
+	input := batchInput{ticket: ticket}
+	if len(repos) > 1 {
+		input, err = promptBatchInput(ticket)
+		if err != nil {
+			return err
 		}
 	}
+
+	paths := make([]string, 0, len(repos))
 	for _, repo := range repos {
-		destPath, err := a.pullRepoForTicket(source, ticket, repo)
+		if input.shared {
+			fmt.Printf("\n== %s ==\n", repo)
+		}
+		destPath, err := a.pullRepoForTicket(source, input, repo)
 		if err != nil {
 			return err
 		}
@@ -211,18 +235,44 @@ func (a *App) pullRepos(repos []string) error {
 	}
 
 	fmt.Printf("Created %d repos for ticket #%s\n", len(paths), ticket)
-	if os.Getenv("TMUX") == "" {
-		return fmt.Errorf("not running inside a tmux session; cannot open a window for %d repos:\n  %s", len(paths), strings.Join(paths, "\n  "))
+	return tmuxOpenGroup(ticket, paths)
+}
+
+// promptBatchInput asks the questions that apply to the whole batch once. The
+// branch label is turned into the same feature/<ticket>-<slug> branch in every
+// repo, so the repos stay aligned for review.
+func promptBatchInput(ticket string) (batchInput, error) {
+	label, err := askInput("Name your branch for all repos (leave empty to use each base branch)", "")
+	if err != nil {
+		return batchInput{}, err
 	}
-	return tmuxOpenWindow(ticket, paths)
+	label = strings.TrimSpace(label)
+	if label != "" {
+		preview, err := everonBranchName(ticket, label)
+		if err != nil {
+			return batchInput{}, err
+		}
+		fmt.Printf("Branch preview (all repos): %s\n", preview)
+	}
+	description, err := promptTaskDesc("")
+	if err != nil {
+		return batchInput{}, err
+	}
+	return batchInput{
+		ticket:      ticket,
+		branchLabel: label,
+		description: description,
+		shared:      true,
+	}, nil
 }
 
 // pullRepoForTicket clones a single repo for an already-chosen ticket, copies
 // its asset template, creates/switches to the work branch, and records the
 // task. It returns the destination path so callers can fan out across repos.
-func (a *App) pullRepoForTicket(source, ticket, repo string) (string, error) {
+func (a *App) pullRepoForTicket(source string, input batchInput, repo string) (string, error) {
+	ticket := input.ticket
 	cloneURL := buildCloneURL(source, repo)
-	destName, err := promptDestinationName(a.PullRoot, ticket, repo)
+	destName, err := a.resolveDestinationName(input, repo)
 	if err != nil {
 		return "", err
 	}
@@ -251,7 +301,13 @@ func (a *App) pullRepoForTicket(source, ticket, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	newBranch, createNewBranch, err := promptBranchName(ticket, baseBranch)
+	var newBranch string
+	var createNewBranch bool
+	if input.shared {
+		newBranch, createNewBranch, err = branchNameFromChoice(ticket, baseBranch, input.branchLabel)
+	} else {
+		newBranch, createNewBranch, err = promptBranchName(ticket, baseBranch)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -266,9 +322,12 @@ func (a *App) pullRepoForTicket(source, ticket, repo string) (string, error) {
 		}
 	}
 
-	description, err := promptTaskDesc("")
-	if err != nil {
-		return "", err
+	description := input.description
+	if !input.shared {
+		description, err = promptTaskDesc("")
+		if err != nil {
+			return "", err
+		}
 	}
 	if err := a.addTask(Task{
 		Ticket:      ticket,
@@ -342,7 +401,7 @@ func buildCloneURL(source, repo string) string {
 }
 
 func (a *App) promptAndSaveSource() (string, error) {
-	source, err := promptInput("Set source git namespace", "")
+	source, err := askInput("Set source git namespace", "")
 	if err != nil {
 		return "", err
 	}
@@ -357,7 +416,7 @@ func (a *App) promptAndSaveSource() (string, error) {
 }
 
 func promptTicketNumber() (string, error) {
-	ticket, err := promptInput("Ticket number", "")
+	ticket, err := askInput("Ticket number", "")
 	if err != nil {
 		return "", err
 	}
@@ -381,12 +440,27 @@ func ticketPrefixedName(ticket, name string) (string, error) {
 	return fmt.Sprintf("%s-%s", ticket, name), nil
 }
 
+// resolveDestinationName skips the folder prompt for a batch: asking for the
+// same name once per repo is friction, and <ticket>-<repo> is already unique.
+func (a *App) resolveDestinationName(input batchInput, repo string) (string, error) {
+	if !input.shared {
+		return promptDestinationName(a.PullRoot, input.ticket, repo)
+	}
+	autoName, err := ticketPrefixedName(input.ticket, repo)
+	if err != nil {
+		return "", err
+	}
+	finalName := nextAvailableName(a.PullRoot, autoName)
+	fmt.Printf("Folder: %s\n", finalName)
+	return finalName, nil
+}
+
 func promptDestinationName(root, ticket, repo string) (string, error) {
 	autoName, err := ticketPrefixedName(ticket, repo)
 	if err != nil {
 		return "", err
 	}
-	choice, err := promptInput("Custom folder name (leave empty for auto)", autoName)
+	choice, err := askInput("Custom folder name (leave empty for auto)", autoName)
 	if err != nil {
 		return "", err
 	}
@@ -412,7 +486,7 @@ func destinationNameFromChoice(ticket, autoName, choice string) (string, error) 
 }
 
 func promptBranchName(ticket, baseBranch string) (string, bool, error) {
-	branchBase, err := promptInput("Name your branch (leave empty to use base branch)", "")
+	branchBase, err := askInput("Name your branch (leave empty to use base branch)", "")
 	if err != nil {
 		return "", false, err
 	}
@@ -433,11 +507,65 @@ func branchNameFromChoice(ticket, baseBranch, choice string) (string, bool, erro
 		}
 		return baseBranch, false, nil
 	}
-	branch, err := ticketPrefixedName(ticket, choice)
+	branch, err := everonBranchName(ticket, choice)
 	if err != nil {
 		return "", false, fmt.Errorf("invalid branch name: %w", err)
 	}
 	return branch, true, nil
+}
+
+// everonBranchName applies the Everon branch convention —
+// feature/<ticket>-<unique-name> — so callers only ever have to supply a
+// human-readable name. The name is slugified for us and the call is
+// idempotent: an input that already carries the type prefix and/or the ticket
+// is not stamped twice. A leading "<type>/" other than feature is preserved,
+// so "fix/flaky login" still yields fix/1234-flaky-login.
+func everonBranchName(ticket, choice string) (string, error) {
+	ticket = strings.TrimSpace(ticket)
+	if ticket == "" {
+		return "", errors.New("ticket number cannot be empty")
+	}
+	choice = strings.TrimSpace(choice)
+	branchType := branchTypeDefault
+	if idx := strings.LastIndex(choice, "/"); idx >= 0 {
+		if declared := slugify(choice[:idx]); declared != "" {
+			branchType = declared
+		}
+		choice = choice[idx+1:]
+	}
+	// The ticket is kept verbatim in the branch, but matched against the
+	// slugified input so a re-typed ticket is not stamped twice.
+	slug := slugify(choice)
+	if slugTicket := slugify(ticket); slugTicket != "" {
+		slug = strings.TrimPrefix(slug, slugTicket+"-")
+		if slug == slugTicket {
+			slug = ""
+		}
+	}
+	if slug == "" {
+		return "", errors.New("branch name cannot be empty")
+	}
+	return fmt.Sprintf("%s/%s-%s", branchType, ticket, slug), nil
+}
+
+// slugify lowercases free-form text and collapses everything that is not a
+// letter or digit into single dashes, yielding a git-ref-safe fragment.
+func slugify(s string) string {
+	var b strings.Builder
+	dashPending := false
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		switch {
+		case ('a' <= r && r <= 'z') || ('0' <= r && r <= '9'):
+			if dashPending && b.Len() > 0 {
+				b.WriteByte('-')
+			}
+			dashPending = false
+			b.WriteRune(r)
+		default:
+			dashPending = true
+		}
+	}
+	return b.String()
 }
 
 func switchToExistingBranch(repoPath, branch string) error {
@@ -494,7 +622,7 @@ func (a *App) selectReposInteractive() ([]string, error) {
 		return nil, err
 	}
 
-	query, err := promptInput("Find repos (fuzzy; space-separate for multiple, blank to browse)", "")
+	query, err := askInput("Find repos (fuzzy; space-separate for multiple, blank to browse)", "")
 	if err != nil {
 		return nil, err
 	}
@@ -853,9 +981,6 @@ func (a *App) runTaskSelector() error {
 		if ticket == "" {
 			return errors.New("selected task has no ticket number")
 		}
-		if os.Getenv("TMUX") == "" {
-			return errors.New("not running inside a tmux session")
-		}
 		// Collect paths for all tasks sharing the same ticket.
 		paths := []string{cfg.Tasks[idx].Path}
 		for i, t := range cfg.Tasks {
@@ -863,7 +988,7 @@ func (a *App) runTaskSelector() error {
 				paths = append(paths, t.Path)
 			}
 		}
-		return tmuxOpenWindow(ticket, paths)
+		return tmuxOpenGroup(ticket, paths)
 	}
 
 	return launchShell(cfg.Tasks[idx].Path)
@@ -1016,24 +1141,91 @@ func taskMenuItem(t Task, index int) menuItem {
 	}
 }
 
+// tmuxOpenGroup puts every repo of a ticket side by side. Inside tmux that is
+// a new window; outside it we create a session and attach, so a batch pull from
+// a plain terminal still lands in the grouped view.
+func tmuxOpenGroup(ticket string, paths []string) error {
+	if len(paths) == 0 {
+		return errors.New("no paths provided for tmux window")
+	}
+	if _, err := lookPath("tmux"); err != nil {
+		return fmt.Errorf("tmux not found; cannot group %d repos:\n  %s", len(paths), strings.Join(paths, "\n  "))
+	}
+	if os.Getenv("TMUX") != "" {
+		return tmuxOpenWindow(ticket, paths)
+	}
+	return tmuxOpenSession(ticket, paths)
+}
+
 func tmuxOpenWindow(ticket string, paths []string) error {
 	if len(paths) == 0 {
 		return errors.New("no paths provided for tmux window")
 	}
+	shell := resolveShell()
 	windowName := "#" + ticket
 	// Create the new window with the first path as the start directory.
-	out, err := exec.Command("tmux", "new-window", "-P", "-F", "#{window_id}", "-n", windowName, "-c", paths[0]).Output()
+	out, err := exec.Command("tmux", "new-window", "-P", "-F", "#{window_id}", "-n", windowName, "-c", paths[0], shell).Output()
 	if err != nil {
 		return fmt.Errorf("tmux new-window failed: %w", err)
 	}
 	windowID := strings.TrimSpace(string(out))
-	// Open additional panes for remaining paths.
-	for _, p := range paths[1:] {
-		if err := runCmd("", "tmux", "split-window", "-t", windowID, "-c", p); err != nil {
+	return tmuxSplitPanes(windowID, paths[1:], shell)
+}
+
+// tmuxOpenSession builds a detached session holding one pane per repo, then
+// attaches to it.
+func tmuxOpenSession(ticket string, paths []string) error {
+	shell := resolveShell()
+	session := nextAvailableTmuxSession(tmuxSessionName(ticket))
+	if err := runCmd("", "tmux", "new-session", "-d", "-s", session, "-c", paths[0], shell); err != nil {
+		return fmt.Errorf("tmux new-session failed: %w", err)
+	}
+	if err := tmuxSplitPanes(session, paths[1:], shell); err != nil {
+		return err
+	}
+	fmt.Printf("Attaching to tmux session %s\n", session)
+	cmd := exec.Command("tmux", "attach-session", "-t", session)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// tmuxSplitPanes adds one pane per remaining path. It re-tiles after every
+// split so panes stay evenly sized; without that, a fourth or fifth repo hits
+// "no space for new pane".
+func tmuxSplitPanes(target string, paths []string, shell string) error {
+	for _, p := range paths {
+		if err := runCmd("", "tmux", "split-window", "-t", target, "-c", p, shell); err != nil {
 			return fmt.Errorf("tmux split-window failed: %w", err)
+		}
+		if err := runCmd("", "tmux", "select-layout", "-t", target, "tiled"); err != nil {
+			return fmt.Errorf("tmux select-layout failed: %w", err)
 		}
 	}
 	return nil
+}
+
+// tmuxSessionName sanitizes a ticket into a tmux session name; tmux rejects
+// "." and ":" in names.
+func tmuxSessionName(ticket string) string {
+	name := slugify(ticket)
+	if name == "" {
+		name = "pulley"
+	}
+	return "ticket-" + name
+}
+
+func nextAvailableTmuxSession(base string) string {
+	if exec.Command("tmux", "has-session", "-t="+base).Run() != nil {
+		return base
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s-%d", base, i)
+		if exec.Command("tmux", "has-session", "-t="+candidate).Run() != nil {
+			return candidate
+		}
+	}
 }
 
 func promptTaskDescription(existing string) (string, error) {
@@ -1064,7 +1256,7 @@ func promptTaskEditor(current Task) (Task, error) {
 				Value(&updated.Description),
 			huh.NewInput().
 				Title("Branch").
-				Placeholder("feature/my-task").
+				Placeholder("feature/1234-my-task").
 				Value(&updated.Branch),
 			huh.NewInput().
 				Title("Path").
@@ -1129,11 +1321,24 @@ func confirm(prompt string) (bool, error) {
 	return line == "y" || line == "yes", nil
 }
 
-func launchShell(dir string) error {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
+// resolveShell picks the interactive shell a pulled repo opens in. Our
+// terminals come up in fish even when $SHELL still points at zsh, so fish wins
+// when it is installed; PULLEY_SHELL overrides everything.
+func resolveShell() string {
+	if custom := strings.TrimSpace(os.Getenv("PULLEY_SHELL")); custom != "" {
+		return custom
 	}
+	if path, err := lookPath("fish"); err == nil && path != "" {
+		return path
+	}
+	if shell := strings.TrimSpace(os.Getenv("SHELL")); shell != "" {
+		return shell
+	}
+	return "/bin/sh"
+}
+
+func launchShell(dir string) error {
+	shell := resolveShell()
 	cmd := exec.Command(shell)
 	cmd.Dir = dir
 	cmd.Stdin = os.Stdin
